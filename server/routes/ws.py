@@ -2,7 +2,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 import jwt
 from server.config import settings
 from server.db.session import SessionLocal
-from server.models import ChatMember, User, Session
+from server.models import ChatMember, User, Session, Block
 from sqlalchemy import select, and_
 
 router = APIRouter()
@@ -43,6 +43,12 @@ async def relay_call_event(uid: int, data: dict):
         peer_ids = [int(x) for x in member_ids if int(x) != int(uid)]
         peers = db.scalars(select(User).where(User.id.in_(peer_ids), User.is_active.is_(True))).all()
         if not any(bool(p.allow_calls) for p in peers):
+            return
+        blocked = db.scalar(select(Block.id).where(
+            ((Block.blocker_id == uid) & (Block.blocked_id.in_(peer_ids))) |
+            ((Block.blocker_id.in_(peer_ids)) & (Block.blocked_id == uid))
+        ))
+        if blocked:
             return
 
     call_type = data.get("type")
