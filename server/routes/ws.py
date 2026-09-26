@@ -30,15 +30,15 @@ async def broadcast_to_users(user_ids, payload: dict):
 
 def chat_member_ids(user_id: int):
     with SessionLocal() as db:
+        chat_ids = db.scalars(
+            select(ChatMember.chat_id).where(ChatMember.user_id == user_id)
+        ).all()
+        if not chat_ids:
+            return []
         return db.scalars(
             select(ChatMember.user_id)
             .join(User, User.id == ChatMember.user_id)
-            .where(
-                ChatMember.chat_id.in_(
-                    select(ChatMember.chat_id).where(ChatMember.user_id == user_id)
-                ),
-                User.is_active.is_(True),
-            )
+            .where(ChatMember.chat_id.in_(chat_ids), User.is_active.is_(True))
         ).all()
 
 async def broadcast_presence(user_id: int):
