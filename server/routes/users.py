@@ -63,6 +63,7 @@ def me(user=Depends(current_user)):
 @router.patch("/me")
 async def update_me(data: ProfileUpdate, me=Depends(current_user)):
     visibility_changed = data.online_visibility is not None
+    new_online_visible = True
     with SessionLocal() as db:
         user = db.get(User, me["id"])
         if not user:
@@ -91,6 +92,7 @@ async def update_me(data: ProfileUpdate, me=Depends(current_user)):
             user.typing_visibility = data.typing_visibility
         db.commit()
         db.refresh(user)
+        new_online_visible = user.online_visibility != "nobody"
         result = {
             **public_user(db, user, user.id),
             "online_visibility": user.online_visibility,
@@ -101,7 +103,7 @@ async def update_me(data: ProfileUpdate, me=Depends(current_user)):
         }
     if visibility_changed:
         from server.routes.ws import notify_presence
-        await notify_presence(me["id"], True)
+        await notify_presence(me["id"], new_online_visible)
     return result
 
 @router.post("/me/crypto-key")
