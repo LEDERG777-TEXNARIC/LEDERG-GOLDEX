@@ -1,95 +1,49 @@
 # LEDERG Messenger
 
-Self-hosted Telegram-style messenger built around FastAPI, SQLAlchemy, SQLite WAL and WebSockets.
+Self-hosted Telegram-style messenger foundation for the LEDERG project.
 
-## Уже реализовано
+## Сейчас уже работает
 
-- регистрация и вход по уникальному @username;
-- смена имени, @username и bio;
-- загрузка/удаление аватара;
-- поиск по @нику и имени;
-- LIVE presence: зелёная точка только когда пользователь реально онлайн;
-- realtime события через WebSocket;
-- личные 1:1 чаты с отдельным типом `direct` (это не группа);
-- история сообщений;
-- отправка, редактирование и удаление сообщений;
-- typing/read события с настройками приватности;
-- чёрный список;
-- настройки видимости онлайн-статуса, аватара и поиска;
-- переключатели read receipts и typing;
-- смена пароля и отзыв всех остальных сессий через session version;
-- локальные темы интерфейса и размер текста;
-- индивидуальные настройки каждого чата;
-- загрузка собственных обоев для каждого чата;
-- приватная выдача аватаров и обоев только авторизованным участникам;
-- E2EE для личных сообщений при наличии ключей на устройствах обоих пользователей: браузер шифрует текст AES-GCM через общий ECDH P-256 ключ, сервер сохраняет шифртекст;
-- автоматические SQLite migration/DB integrity checks;
-- WAL и `PRAGMA optimize`;
-- автопилот GitHub: backup БД, установка зависимостей, health-check, known-good revision и автоматический rollback.
+- регистрация и вход по уникальному @username без номера телефона и e-mail;
+- автоматические revocable-сессии и просмотр активных сессий;
+- смена пароля с отзывом остальных сессий;
+- профиль: имя, @username, описание, аватар;
+- загрузка JPG/PNG/WEBP-аватара с проверкой типа и размера;
+- поиск пользователей по @username или имени;
+- настройка видимости поиска, online-статуса, аватара и разрешения новых сообщений;
+- realtime online/offline через WebSocket;
+- зелёный online-индикатор без серого offline-кружка;
+- личные 1:1 чаты без превращения их в группы;
+- история сообщений и realtime доставка;
+- realtime typing/read события;
+- персональные обои каждого личного чата;
+- настройки темы и браузерных уведомлений;
+- SQLite WAL, integrity_check, backup перед обновлением;
+- автоматический GitHub autopilot с last-known-good ревизией и автоматическим rollback;
+- порт 8000.
 
-## Локально
+## Пути
 
-Код: `C:LEDERG-MESSENGER`  
-Данные: `C:LEDERG-MESSENGER-DATA`  
-Порт: `8000`
+Код: C:\LEDERG-MESSENGER  
+Данные: C:\LEDERG-MESSENGER-DATA  
+Локальный адрес: http://127.0.0.1:8000
 
-Открыть:
+CloudPub должен публиковать локальный HTTP/WebSocket сервис на 127.0.0.1:8000.
 
-`http://127.0.0.1:8000`
+## Приватность и безопасность
 
-Для CloudPub публикуй HTTP/WebSocket сервис на `127.0.0.1:8000`.
+LEDERG не просит номер телефона или e-mail для базового аккаунта. Пользователь может отключить глобальную видимость в поиске, online-статус, публичность аватара и получение новых сообщений.
 
-## Основные API
+Приложение отключает Uvicorn access log, поэтому сама веб-служба не записывает стандартный журнал каждого запроса с IP-адресом. При этом сетевой туннель/CloudPub и ОС могут иметь собственные технические журналы.
 
-`POST /api/auth/register`  
-`POST /api/auth/login`  
-`POST /api/auth/password`  
-`POST /api/auth/logout-all`  
-`GET /api/users/me`  
-`PATCH /api/users/me`  
-`POST /api/users/me/avatar`  
-`DELETE /api/users/me/avatar`  
-`POST /api/users/me/crypto-key`  
-`GET /api/users/search?q=nick`  
-`POST /api/users/{user_id}/block`  
-`DELETE /api/users/{user_id}/block`  
-`GET /api/users/blocked`  
-`GET /api/chats`  
-`POST /api/chats`  
-`GET /api/chats/{chat_id}/messages`  
-`POST /api/chats/{chat_id}/messages`  
-`PATCH /api/chats/{chat_id}/messages/{message_id}`  
-`DELETE /api/chats/{chat_id}/messages/{message_id}`  
-`GET/PATCH /api/chats/{chat_id}/settings`  
-`POST/DELETE/GET /api/chats/{chat_id}/wallpaper`  
-`WS /ws?token=...`  
-`GET /health`
+JWT теперь привязан к серверной сессии, которую можно отозвать. При смене пароля остальные сессии отзываются.
 
-## Приватность
+Личные сообщения сейчас защищены авторизацией, проверкой членства в чате, экранированием пользовательского текста и контролем доступа к вложениям. Это ещё не полное end-to-end encryption: сервер технически может видеть содержимое сообщений. Для следующего этапа нужен отдельный криптографический протокол E2EE с ключами на устройствах.
 
-LEDERG не использует номер телефона как идентификатор аккаунта. Пользователь сам выбирает, кому показывать online и аватар, и может полностью выключить поиск по себе.
+## Настройки LEDERG
 
-Для HTTP API используется Bearer JWT. Access log Uvicorn отключён, чтобы локальный сервер не писал стандартные HTTP access-log строки с адресами клиентов.
+Интерфейс уже включает настройки, близкие по структуре к Telegram Web: профиль, приватность, Last Seen/Online-подобная видимость, фото профиля, активные сессии/устройства, уведомления, тема и индивидуальный фон чата. Telegram официально предоставляет похожие категории, включая Privacy and Security, Devices, Notifications and Sounds, Chat Background и Last Seen & Online: https://translations.telegram.org/ru/webk/settings/
 
-E2EE в текущем web-клиенте является device-local: приватный ключ хранится в браузере. Это означает, что новый браузер/новое устройство получает новый ключ и не сможет расшифровать старую историю без переноса ключа. Реализация не является криптографически аудированной и не защищает от компрометации устройства или вредоносного изменения клиента/сервера.
+## Что дальше
 
-## Автопилот
-
-`LEDERG-MESSENGER-SERVER.bat` теперь является ASCII/no-BOM launcher и запускает `scripts/autopilot.ps1`.
-
-Стабильная ревизия сохраняется в:
-
-`C:LEDERG-MESSENGER-DATAlast-known-good.txt`
-
-Логи:
-
-`C:LEDERG-MESSENGER-DATAlogsautopilot.log`  
-`C:LEDERG-MESSENGER-DATAlogsserver.log`
-
-Перед обновлением SQLite backup создаётся в:
-
-`C:LEDERG-MESSENGER-DATAackups`
-
-## Дальше
-
-Следующий слой можно расширять без ломки текущего ядра: реакции, пересылка, вложения и медиа, группы/каналы, unread state, уведомления, контакты, более полноценные устройства/сессии, WebRTC звонки через STUN/TURN, а также отдельный audited E2EE протокол с переносом ключей между устройствами.
+Следующий большой этап: полноценные контакты, блокировки, редактирование и удаление сообщений, реакции, ответы/пересылка, файлы и медиа, unread/read state в БД, группы и каналы, WebRTC-аудио/видео, E2EE для личных чатов, push-уведомления и более мощный FTS5-поиск.
