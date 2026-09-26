@@ -448,7 +448,7 @@ function connectWS(){
  try{
   const scheme=location.protocol==='https:'?'wss':'ws';
   state.ws=new WebSocket(scheme+'://'+location.host+'/ws?token='+encodeURIComponent(state.token));
-  state.ws.onmessage=e=>{
+  state.ws.onmessage=async e=>{
     const d=JSON.parse(e.data||'{}');
     if(d.type==='new_message'){
       const c=state.chats.find(x=>x.id===d.message.chat_id);
