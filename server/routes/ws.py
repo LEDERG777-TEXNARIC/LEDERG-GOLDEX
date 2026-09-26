@@ -45,10 +45,13 @@ async def notify_presence(user_id: int, online: bool):
         if not user:
             return
         recipients = member_ids_for_user(db, user_id)
+        if online:
         visible = [
             uid for uid in recipients
             if uid != user_id and can_view(db, uid, user, user.online_visibility)
         ]
+    else:
+        visible = [uid for uid in recipients if uid != user_id]
     await broadcast_to_users(
         visible,
         {"type": "presence", "user_id": user_id, "online": online},
