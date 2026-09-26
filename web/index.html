@@ -321,6 +321,12 @@ const state={
  activeSettings:'profile',
  callState:{pc:null,stream:null,callId:null,chatId:null,mode:null,remoteUserId:null,pendingOffer:null,pendingCallId:null,pendingMode:null},
  requires2fa:false,
+ rememberDevice:localStorage.getItem('lederg_remember_device')!=='0',
+ sessionRemembered:localStorage.getItem('lederg_session_remembered')!=='0',
+ refreshTimer:null,
+ authWatchdog:null,
+ sessionRecovering:false,
+ authDegraded:false,
  textSize:localStorage.getItem('lederg_text_size')||'16',
  animations:localStorage.getItem('lederg_animations')!=='0',
  sendByEnter:localStorage.getItem('lederg_send_enter')!=='0',
@@ -383,7 +389,7 @@ function scheduleTokenRefresh(){
  state.refreshTimer=setTimeout(()=>refreshSession().catch(()=>{}),delay);
 }
 async function refreshSession(){
- if(!state.token)return false;
+ if(!state.token||state.sessionRecovering)return false;
  try{
   const r=await rawFetch('/api/auth/refresh',{method:'POST'},state.token);
   const data=await r.json().catch(()=>({}));
@@ -392,9 +398,45 @@ async function refreshSession(){
   state.sessionRemembered=data.remembered!==false;
   localStorage.setItem('lederg_token',state.token);
   localStorage.setItem('lederg_session_remembered',state.sessionRemembered?'1':'0');
+  state.authDegraded=false;
   scheduleTokenRefresh();
   return true;
  }catch{return false}
+}
+function showSessionState(message){
+ let box=$('sessionState');
+ if(!box){
+  box=document.createElement('div');
+  box.id='sessionState';
+  box.style.cssText='position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:300;padding:9px 14px;border:1px solid var(--line);border-radius:12px;background:var(--panel);box-shadow:var(--shadow);font-size:12px;color:var(--muted);max-width:calc(100vw - 28px);text-align:center';
+  document.body.appendChild(box);
+ }
+ box.textContent=message;
+ box.style.display='block';
+}
+function hideSessionState(){const box=$('sessionState');if(box)box.style.display='none'}
+async function recoverSession(){
+ if(!state.token||state.sessionRecovering)return false;
+ state.sessionRecovering=true;
+ showSessionState('Восстанавливаем сессию LEDERG…');
+ try{
+  for(let i=0;i<5;i++){
+   if(await refreshSession()&&await loadMe()){
+    state.authDegraded=false;
+    hideSessionState();
+    showApp();
+    try{await loadChats()}catch{}
+    connectWS();
+    return true;
+   }
+   await new Promise(resolve=>setTimeout(resolve,Math.min(2000*(i+1),7000)));
+  }
+  state.authDegraded=true;
+  showSessionState('Сессия временно недоступна. LEDERG продолжит восстановление автоматически.');
+  return false;
+ }finally{
+  state.sessionRecovering=false;
+ }
 }
 async function api(path,options={},allowRefresh=true){
  let r=await rawFetch(path,options,state.token);
@@ -406,9 +448,10 @@ async function api(path,options={},allowRefresh=true){
   }
  }
  if(r.status===401){
-  logout(false);
-  const e=new Error(formatServerError(data,r.status));
-  e.code='AUTH';
+  state.authDegraded=true;
+  recoverSession().catch(()=>{});
+  const e=new Error('Сессия временно не отвечает. LEDERG автоматически восстанавливает соединение.');
+  e.code='AUTH_RETRY';
   throw e;
  }
  if(!r.ok)throw new Error(formatServerError(data,r.status));
@@ -979,31 +1022,32 @@ window.addEventListener('resize',()=>{if(innerWidth>760){$('sidebar').classList.
 window.addEventListener('beforeunload',()=>{try{state.ws?.close()}catch{}});
 async function boot(){
  if(!state.token){showAuth();return}
- try{
-  // Refresh first. This makes a hard browser refresh recover a remembered session.
-  await refreshSession();
-  await loadMe();
- }catch(e){
-  if(e.code==='AUTH'||/Сессия|session|token/i.test(e.message||'')){
-   showAuth();
-   if($('authError'))$('authError').textContent='Сессия завершена. Войди ещё раз.';
-   return;
-  }
-  // A temporary network/backend hiccup must not visually log the user out.
-  showApp();
-  if($('authError'))$('authError').textContent=e.message||'Соединение с сервером временно недоступно.';
-  return;
- }
- try{if(typeof loadCallConfig==='function')await loadCallConfig()}catch{}
  setTheme(state.theme);
  applyClientPrefs();
- scheduleTokenRefresh();
  showApp();
- try{await loadChats()}catch{}
- connectWS();
+ try{if(typeof loadCallConfig==='function')await loadCallConfig()}catch{}
+ if(await refreshSession()&&await loadMe()){
+  scheduleTokenRefresh();
+  try{await loadChats()}catch{}
+  connectWS();
+  updateNotifyPrompt();
+  hideSessionState();
+  return;
+ }
+ // Never erase a saved session because of one bad request or server restart.
+ showSessionState('Восстанавливаем сохранённую сессию…');
+ recoverSession().catch(()=>{});
  updateNotifyPrompt();
 }
+function startAuthWatchdog(){
+ clearInterval(state.authWatchdog);
+ state.authWatchdog=setInterval(async()=>{
+  if(!state.token||document.hidden||state.sessionRecovering)return;
+  if(!(await refreshSession()))recoverSession().catch(()=>{});
+ },120000);
+}
 setAuthMode('login');setTheme(state.theme);applyClientPrefs();
+startAuthWatchdog();
 if(state.token)boot();else showAuth();
 </script>
 <div id="notifyPrompt" class="notify-prompt" style="display:none">
