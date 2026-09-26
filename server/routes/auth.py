@@ -4,6 +4,7 @@ from sqlalchemy import select
 from server.db.session import SessionLocal
 from server.models import User
 from server.auth import hash_password, verify_password, create_session
+import pyotp
 
 router = APIRouter()
 USERNAME = r"^[a-zA-Z0-9_.-]+$"
@@ -16,6 +17,7 @@ class RegisterIn(BaseModel):
 class LoginIn(BaseModel):
     username: str = Field(min_length=3, max_length=32, pattern=USERNAME)
     password: str = Field(min_length=8, max_length=128)
+    otp_code: str | None = Field(default=None, min_length=6, max_length=8)
 
 def user_payload(user: User):
     return {
@@ -46,9 +48,10 @@ def register(data: RegisterIn):
         db.commit()
         db.refresh(user)
         user_id = user.id
+        payload = user_payload(user)
 
     _, token = create_session(user_id)
-    return {"access_token": token, "user": user_payload(user)}
+    return {"access_token": token, "user": payload}
 
 @router.post("/login")
 def login(data: LoginIn):
@@ -57,6 +60,14 @@ def login(data: LoginIn):
         user = db.scalar(select(User).where(User.username == username))
         if not user or not verify_password(data.password, user.password_hash):
             raise HTTPException(401, "Invalid username or password")
+
+        if user.two_factor_enabled:
+            code = (data.otp_code or "").replace(" ", "")
+            if not code:
+                raise HTTPException(401, detail={"requires_2fa": True, "message": "Введите код двухэтапной проверки"})
+            if not user.two_factor_secret or not pyotp.TOTP(user.two_factor_secret).verify(code, valid_window=1):
+                raise HTTPException(401, detail={"requires_2fa": True, "message": "Неверный код двухэтапной проверки"})
+
         user_id = user.id
         payload = user_payload(user)
 
