@@ -30,7 +30,7 @@ Self-hosted Telegram-style messenger for the LEDERG project.
 - кастомный звук уведомлений LEDERG генерируется прямо в клиенте;
 - персональные обои каждого личного чата;
 - mute для отдельного чата;
-- SQLite WAL, integrity_check, backup;
+- SQLite WAL, integrity_check, foreign-key check, optimize, verified rolling backups и автоматический self-healing guard;
 - автоматический GitHub autopilot и откат к last-known-good;
 - порт 8000.
 
