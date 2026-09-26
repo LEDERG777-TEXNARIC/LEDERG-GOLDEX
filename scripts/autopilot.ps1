@@ -1,8 +1,5 @@
-# LEDERG Messenger self-healing autopilot
-param([switch]$Once)
-
+# LEDERG Messenger Autopilot
 $ErrorActionPreference = "Stop"
-
 $RepoUrl = "https://github.com/LEDERG777-TEXNARIC/LEDERG-GOLDEX.git"
 $Branch = "main"
 $AppDir = "C:\LEDERG-MESSENGER"
@@ -11,418 +8,232 @@ $BackupDir = Join-Path $DataDir "backups"
 $LogDir = Join-Path $DataDir "logs"
 $LogFile = Join-Path $LogDir "autopilot.log"
 $GoodFile = Join-Path $DataDir "last-known-good.txt"
-$GoodHistory = Join-Path $DataDir "known-good-history.txt"
+$PidFile = Join-Path $DataDir "server.pid"
 $Port = 8000
-$ServerTask = "LEDERG-MESSENGER"
-$ServerTaskBat = Join-Path $DataDir "start-server.bat"
+$CheckSeconds = 60
 
 New-Item -ItemType Directory -Force -Path $DataDir,$BackupDir,$LogDir | Out-Null
 
-function Log([string]$Message) {
-    $line = "[{0}] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Message
+function Log([string]$m) {
+    $line = "[{0}] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $m
     Add-Content -LiteralPath $LogFile -Value $line -Encoding UTF8
+    Write-Host $line
 }
 
-$mutex = New-Object System.Threading.Mutex($false,"Global\LEDERG-MESSENGER-AUTOPILOT")
-if (-not $mutex.WaitOne(0)) { exit 0 }
+$mutex = New-Object System.Threading.Mutex($false, "Global\LEDERG-MESSENGER-AUTOPILOT")
+if (-not $mutex.WaitOne(0)) { Log "Another autopilot instance is running."; exit 0 }
 
-function Run-Git([string[]]$Args) {
-    $out = & git @Args 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "git $($Args -join ' ') failed: $out" }
+function G([string[]]$args) {
+    $out = & git @args 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "git $($args -join ' ') failed: $out" }
     return $out
 }
+function Commit([string]$ref) { return (& git -C $AppDir rev-parse $ref).Trim() }
 
-function Head([string]$Ref) {
-    return (& git -C $AppDir rev-parse $Ref).Trim()
-}
-
-function Ensure-Repo {
-    if (Test-Path (Join-Path $AppDir ".git")) {
-        & git -C $AppDir remote set-url origin $RepoUrl 2>$null | Out-Null
-        return
-    }
-
-    if (Test-Path $AppDir) {
-        $old = $AppDir + "_old_" + (Get-Date -Format "yyyyMMdd_HHmmss")
-        Move-Item $AppDir $old -Force
-    }
-
-    Log "Cloning repository."
-    & git clone --branch $Branch $RepoUrl $AppDir 2>&1 | ForEach-Object { Log $_ }
-    if ($LASTEXITCODE -ne 0) { throw "Git clone failed" }
-}
-
-function Find-PythonLauncher {
-    foreach ($name in @("py.exe","python.exe")) {
-        $cmd = Get-Command $name -ErrorAction SilentlyContinue
-        if ($cmd) { return $cmd.Source }
-    }
-    return $null
-}
-
-function Ensure-Venv {
-    $py = Join-Path $AppDir ".venv\Scripts\python.exe"
-    if (Test-Path $py) { return $py }
-
-    $launcher = Find-PythonLauncher
-    if (-not $launcher) { throw "Python launcher not found" }
-
-    Log "Creating Python virtual environment."
-    if ($launcher.ToLower().EndsWith("py.exe")) {
-        & $launcher -3 -m venv (Join-Path $AppDir ".venv") 2>&1 | ForEach-Object { Log $_ }
+function EnsureRepo {
+    if (-not (Test-Path (Join-Path $AppDir ".git"))) {
+        if (Test-Path $AppDir) {
+            $old = $AppDir + "_old_" + (Get-Date -Format yyyyMMdd_HHmmss)
+            Move-Item $AppDir $old -Force
+        }
+        Log "Cloning $RepoUrl"
+        & git clone --branch $Branch $RepoUrl $AppDir 2>&1 | ForEach-Object { Log $_ }
+        if ($LASTEXITCODE -ne 0) { throw "Clone failed" }
     } else {
-        & $launcher -m venv (Join-Path $AppDir ".venv") 2>&1 | ForEach-Object { Log $_ }
+        & git -C $AppDir remote set-url origin $RepoUrl 2>&1 | Out-Null
     }
-    if ($LASTEXITCODE -ne 0) { throw "Virtual environment creation failed" }
-    return $py
 }
-
-function Install-Dependencies([string]$Py) {
-    & $Py -m pip install -r (Join-Path $AppDir "requirements.txt") --disable-pip-version-check --no-input 2>&1 |
-        ForEach-Object { Log $_ }
+function EnsureVenv {
+    $py=Join-Path $AppDir ".venv\Scripts\python.exe"
+    if (-not (Test-Path $py)) {
+        & py -3 -m venv (Join-Path $AppDir ".venv")
+        if ($LASTEXITCODE -ne 0) { throw "Python venv creation failed" }
+    }
+}
+function InstallDeps {
+    $py=Join-Path $AppDir ".venv\Scripts\python.exe"
+    & $py -m pip install -r (Join-Path $AppDir "requirements.txt") --disable-pip-version-check --no-input 2>&1 | ForEach-Object { Log $_ }
     if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed" }
 }
-
-function Compile-Check([string]$Py) {
-    & $Py -m compileall -q (Join-Path $AppDir "server") (Join-Path $AppDir "run.py") 2>&1 |
-        ForEach-Object { Log $_ }
-    if ($LASTEXITCODE -ne 0) { throw "Python compile check failed" }
-}
-
-function DB-Check([string]$Py) {
-    $script = Join-Path $AppDir "scripts\db_maintenance.py"
-    if (-not (Test-Path $script)) { return }
-    & $Py $script 2>&1 | ForEach-Object { Log $_ }
-    if ($LASTEXITCODE -ne 0) { throw "Database maintenance failed" }
-}
-
-function Create-Server-Task {
-@"
-@echo off
-cd /d "$AppDir"
-set "LEDERG_HOST=0.0.0.0"
-set "LEDERG_PORT=$Port"
-"$AppDir\.venv\Scripts\python.exe" "$AppDir\run.py" >> "$DataDir\logs\server.log" 2>&1
-"@ | Set-Content -LiteralPath $ServerTaskBat -Encoding ASCII
-
-    & schtasks /Create /TN $ServerTask /SC ONSTART /RU SYSTEM /RL HIGHEST /F /TR ('"' + $ServerTaskBat + '"') 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "Server scheduled task creation failed" }
-}
-
-function Get-LedergRunProcesses {
+function Healthy {
     try {
-        return @(
-            Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-            Where-Object {
-                $_.Name -match '^python(w)?\.exe$' -and
-                $_.CommandLine -and
-                $_.CommandLine -like "*$AppDir*run.py*"
-            }
-        )
-    } catch {
-        return @()
-    }
-}
-
-function Get-PortPids {
-    try {
-        $connections = Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction Stop
-        return @($connections | Select-Object -ExpandProperty OwningProcess -Unique)
-    } catch {
-        $lines = netstat -ano -p tcp 2>$null | Select-String ":$Port\s+.*LISTENING\s+(\d+)$"
-        return @($lines | ForEach-Object { [int]$_.Matches[0].Groups[1].Value } | Select-Object -Unique)
-    }
-}
-
-function Port-Free {
-    return ((Get-PortPids).Count -eq 0)
-}
-
-function Stop-LedergServer {
-    & schtasks /End /TN $ServerTask 2>&1 | Out-Null
-    Start-Sleep -Seconds 2
-
-    foreach ($proc in @(Get-LedergRunProcesses)) {
-        try {
-            Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
-        } catch {}
-    }
-
-    foreach ($pid in @(Get-PortPids)) {
-        try {
-            $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$pid" -ErrorAction SilentlyContinue
-            $cmdline = $proc.CommandLine
-            if ($cmdline -and $cmdline -like "*$AppDir*run.py*") {
-                Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
-            } elseif ($proc.Name -match '^python(w)?\.exe$' -and $cmdline -and $cmdline -like "*$AppDir*") {
-                Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
-            } else {
-                Log "Port $Port is occupied by PID $pid outside LEDERG. It will NOT be killed."
-            }
-        } catch {}
-    }
-
-    $deadline = (Get-Date).AddSeconds(15)
-    while ((Get-Date) -lt $deadline) {
-        if (Port-Free) { return }
-        Start-Sleep -Milliseconds 500
-    }
-
-    if (-not (Port-Free)) {
-        throw "Port $Port is still occupied after LEDERG shutdown"
-    }
-}
-
-function Start-LedergServer {
-    if (-not (Port-Free)) {
-        Stop-LedergServer
-    }
-
-    & schtasks /Run /TN $ServerTask 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "Server scheduled task start failed" }
-
-    $deadline = (Get-Date).AddSeconds(30)
-    while ((Get-Date) -lt $deadline) {
-        if (Is-Healthy) { return }
-        Start-Sleep -Seconds 1
-    }
-
-    throw "LEDERG server did not become healthy on port $Port"
-}
-
-function Is-Healthy {
-    try {
-        $r = Invoke-RestMethod "http://127.0.0.1:$Port/health" -TimeoutSec 5
+        $r=Invoke-RestMethod "http://127.0.0.1:$Port/health" -TimeoutSec 8
         return ($r.ok -eq $true -and $r.database -eq "ok")
-    } catch {
-        return $false
-    }
+    } catch { return $false }
 }
-
-function Backup-Database {
-    $db = Join-Path $DataDir "lederg.db"
-    if (-not (Test-Path $db)) { return $null }
-
-    $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
-    $dest = Join-Path $BackupDir "lederg_$stamp.db"
-
-    Copy-Item $db $dest -Force
-    foreach ($suffix in @("-wal","-shm")) {
-        $src = "$db$suffix"
-        if (Test-Path $src) { Copy-Item $src "$dest$suffix" -Force }
+function FindServerProcess {
+    Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" -ErrorAction SilentlyContinue |
+      Where-Object {
+        $_.CommandLine -and
+        $_.CommandLine -like "*$AppDir*" -and
+        $_.CommandLine -like "*run.py*"
+      }
+}
+function StopServer {
+    $ids=@()
+    if(Test-Path $PidFile){
+        $pidText=(Get-Content $PidFile -Raw).Trim()
+        $p=0
+        if([int]::TryParse($pidText,[ref]$p) -and $p -gt 0){$ids += $p}
     }
-
-    Get-ChildItem $BackupDir -Filter "lederg_*.db" |
-        Sort-Object LastWriteTime -Descending |
-        Select-Object -Skip 20 |
-        Remove-Item -Force -ErrorAction SilentlyContinue
-
-    Log "Database backup: $dest"
+    $ids += @(FindServerProcess | Select-Object -ExpandProperty ProcessId)
+    foreach($id in ($ids | Sort-Object -Unique)){
+        try { Stop-Process -Id $id -Force -ErrorAction Stop; Log "Stopped server PID=$id" } catch {}
+    }
+    Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+}
+function StartServer {
+    StopServer
+    $py=Join-Path $AppDir ".venv\Scripts\python.exe"
+    $out=Join-Path $LogDir "server.log"
+    $err=Join-Path $LogDir "server-error.log"
+    if(-not (Test-Path $py)){throw "Python executable missing"}
+    $runpy=Join-Path $AppDir "run.py"
+    $proc=Start-Process -FilePath $py -ArgumentList ('"' + $runpy + '"') -WorkingDirectory $AppDir -RedirectStandardOutput $out -RedirectStandardError $err -WindowStyle Hidden -PassThru
+    Set-Content -LiteralPath $PidFile -Value $proc.Id -Encoding ASCII
+    Log "Started server PID=$($proc.Id) on port $Port"
+    Start-Sleep -Seconds 4
+}
+function EnsureServer {
+    if(Healthy){return}
+    Log "Server is offline/unhealthy; starting."
+    StartServer
+    if(-not (Healthy)){throw "Server did not become healthy"}
+}
+function BackupDb {
+    $db=Join-Path $DataDir "lederg.db"
+    if(-not (Test-Path $db)){return $null}
+    StopServer
+    $stamp=Get-Date -Format yyyyMMdd_HHmmss
+    $dest=Join-Path $BackupDir "lederg_$stamp.db"
+    Copy-Item $db $dest -Force
+    foreach($s in @("-wal","-shm")){
+        $p="$db$s"
+        if(Test-Path $p){Copy-Item $p "$dest$s" -Force}
+    }
+    Get-ChildItem $BackupDir -Filter "lederg_*.db" | Sort-Object LastWriteTime -Descending | Select-Object -Skip 20 | Remove-Item -Force -ErrorAction SilentlyContinue
+    Log "DB backup: $dest"
     return $dest
 }
-
-function Restore-Database([string]$Backup) {
-    if (-not $Backup) { return }
-    $db = Join-Path $DataDir "lederg.db"
-
-    Copy-Item $Backup $db -Force
-    foreach ($suffix in @("-wal","-shm")) {
-        $src = "$Backup$suffix"
-        $dst = "$db$suffix"
-        if (Test-Path $src) {
-            Copy-Item $src $dst -Force
-        } elseif (Test-Path $dst) {
-            Remove-Item $dst -Force -ErrorAction SilentlyContinue
-        }
+function RestoreDb([string]$backup) {
+    if(-not $backup){return}
+    StopServer
+    $db=Join-Path $DataDir "lederg.db"
+    Copy-Item $backup $db -Force
+    foreach($s in @("-wal","-shm")){
+        $p="$backup$s"
+        $target="$db$s"
+        if(Test-Path $p){Copy-Item $p $target -Force} elseif(Test-Path $target){Remove-Item $target -Force}
     }
-    Log "Database restored from backup."
+    Log "DB restored from backup."
 }
-
-function Read-GoodHistory {
-    if (-not (Test-Path $GoodHistory)) { return @() }
-    return @(
-        Get-Content $GoodHistory |
-        Where-Object { $_ -match "^[0-9a-f]{40}$" } |
-        Select-Object -Unique
-    )
-}
-
-function Record-Good([string]$Commit) {
-    if (-not $Commit -or $Commit -notmatch "^[0-9a-f]{40}$") { return }
-    $items = @($Commit) + (Read-GoodHistory)
-    $items = @($items | Select-Object -Unique | Select-Object -First 10)
-    Set-Content -LiteralPath $GoodHistory -Value $items -Encoding ASCII
-    Set-Content -LiteralPath $GoodFile -Value $Commit -Encoding ASCII
-}
-
-function Best-Rollback([string]$Current) {
-    foreach ($item in (Read-GoodHistory)) {
-        if ($item -ne $Current) { return $item }
+function Good([string]$commit){Set-Content -LiteralPath $GoodFile -Value $commit -Encoding ASCII}
+function ReadGood([string]$fallback){
+    if(Test-Path $GoodFile){
+        $v=(Get-Content $GoodFile -Raw).Trim()
+        if($v -match "^[0-9a-f]{40}$"){return $v}
     }
-    return $null
+    return $fallback
 }
-
-function Ensure-AutopilotTask {
-    $supervisor = "C:\LEDERG-MESSENGER-BOOT\supervisor.ps1"
-    if (-not (Test-Path $supervisor)) { return }
-    & schtasks /Query /TN "LEDERG-AUTOPILOT" 2>&1 | Out-Null
-    if ($LASTEXITCODE -eq 0) { return }
-
-    $tr = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $supervisor + '"'
-    & schtasks /Create /TN "LEDERG-AUTOPILOT" /SC ONSTART /RU SYSTEM /RL HIGHEST /F /TR $tr 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { Log "Could not create autopilot startup task." }
-}
-
-function Run-Repair {
-    $py = Ensure-Venv
-    Stop-LedergServer
-    Compile-Check $py
-    Install-Dependencies $py
-    DB-Check $py
-    Create-Server-Task
-    Start-LedergServer
-    if (-not (Is-Healthy)) { throw "Repair health check failed" }
-}
-
-function Update-Once {
-    Ensure-Repo
-    $py = Ensure-Venv
-
-    Run-Git @("fetch","origin",$Branch,"--prune") | Out-Null
-
-    $local = Head "HEAD"
-    $remote = Head "origin/$Branch"
-
-    # Make sure a currently healthy revision is always recorded before risking an update.
-    if (Is-Healthy) {
-        Record-Good $local
+function DbCheck {
+    $py=Join-Path $AppDir ".venv\Scripts\python.exe"
+    $script=Join-Path $AppDir "scripts\db_maintenance.py"
+    if(Test-Path $script){
+        & $py $script 2>&1 | ForEach-Object {Log $_}
+        if($LASTEXITCODE -ne 0){throw "DB maintenance failed"}
     }
-
-    if ($local -eq $remote) {
-        if (Is-Healthy) {
-            Ensure-AutopilotTask
-            return
-        }
-
-        Log "LEDERG is unhealthy on current revision $local. Attempting self-heal."
-        try {
-            Run-Repair
-            Ensure-AutopilotTask
-            return
-        } catch {
-            Log "Self-heal failed: $($_.Exception.Message)"
-        }
-    }
-
-    Log "NEW REVISION: $local -> $remote"
-
-    $backup = $null
-    $rollback = $local
-
+}
+function UpdateCycle {
+    Push-Location $AppDir
+    $local=$null
+    $backup=$null
     try {
-        if (Is-Healthy) {
-            Record-Good $local
-            $rollback = $local
-        } else {
-            $rollback = Best-Rollback $local
-            if (-not $rollback) { $rollback = $local }
+        G @("fetch","origin",$Branch,"--prune") | Out-Null
+        $local=Commit "HEAD"
+        $remote=Commit "origin/$Branch"
+        $good=ReadGood $local
+
+        if($local -eq $remote){
+            if(-not (Test-Path $GoodFile)){Good $local}
+            if(-not (Healthy)){
+                Log "Current revision is unhealthy."
+                StartServer
+                if(-not (Healthy)){throw "Current revision remains unhealthy"}
+            }
+            return
         }
 
-        Stop-LedergServer
-        $backup = Backup-Database
+        Log "NEW REVISION: $local -> $remote ; known-good=$good"
+        $backup=BackupDb
+        G @("reset","--hard",$remote) | Out-Null
+        G @("clean","-fd") | Out-Null
+        EnsureVenv
+        InstallDeps
+        DbCheck
+        StartServer
 
-        Run-Git @("reset","--hard",$remote) | Out-Null
-        Run-Git @("clean","-fd") | Out-Null
-
-        $py = Ensure-Venv
-        Compile-Check $py
-        Install-Dependencies $py
-        DB-Check $py
-        Create-Server-Task
-        Start-LedergServer
-
-        if (-not (Is-Healthy)) {
-            throw "New revision failed health check"
+        if(Healthy){
+            Good $remote
+            Log "UPDATE SUCCESS: $remote is now known-good."
+            return
         }
-
-        Record-Good $remote
-        Log "UPDATE SUCCESS: $remote"
+        throw "Health check failed after update"
     } catch {
-        Log "UPDATE FAILED: $($_.Exception.Message)"
-
+        Log "UPDATE ERROR: $($_.Exception.Message)"
         try {
-            Stop-LedergServer
-
-            if (-not $rollback -or $rollback -notmatch "^[0-9a-f]{40}$") {
-                $rollback = Best-Rollback $local
+            StopServer
+            $rollback=$local
+            if(-not $rollback){$rollback="HEAD~1"}
+            if(Test-Path $GoodFile){
+                $candidate=(Get-Content $GoodFile -Raw).Trim()
+                if($candidate -match "^[0-9a-f]{40}$"){$rollback=$candidate}
             }
-            if (-not $rollback) {
-                throw "No stable revision available for rollback"
-            }
-
-            Log "ROLLBACK TO STABLE REVISION: $rollback"
-            Run-Git @("reset","--hard",$rollback) | Out-Null
-
-            $py = Ensure-Venv
-            Compile-Check $py
-            Install-Dependencies $py
-            if ($backup) { Restore-Database $backup }
-            DB-Check $py
-            Create-Server-Task
-            Start-LedergServer
-
-            if (-not (Is-Healthy)) {
+            Log "ROLLBACK TO: $rollback"
+            G @("reset","--hard",$rollback) | Out-Null
+            EnsureVenv
+            InstallDeps
+            if($backup){RestoreDb $backup}
+            DbCheck
+            StartServer
+            if(Healthy){
+                Good $rollback
+                Log "ROLLBACK SUCCESS: $rollback"
+            } else {
                 throw "Rollback health check failed"
             }
-
-            Record-Good $rollback
-            Log "ROLLBACK SUCCESS: $rollback"
         } catch {
-            Log "CRITICAL: rollback failed too: $($_.Exception.Message)"
-            try { Stop-LedergServer } catch {}
+            Log "CRITICAL: rollback also failed: $($_.Exception.Message)"
+            StopServer
             throw
         }
+    } finally {
+        Pop-Location
     }
-
-    Ensure-AutopilotTask
 }
 
 try {
-    if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw "Git not found in PATH" }
-
-    Ensure-Repo
-    $py = Ensure-Venv
-    Ensure-AutopilotTask
-
-    if (-not (Test-Path $ServerTaskBat)) {
-        Create-Server-Task
+    if(-not (Get-Command git -ErrorAction SilentlyContinue)){throw "Git not found in PATH"}
+    if(-not (Get-Command py -ErrorAction SilentlyContinue)){throw "Python launcher not found"}
+    EnsureRepo
+    EnsureVenv
+    InstallDeps
+    DbCheck
+    EnsureServer
+    if(Healthy){
+        $head=Commit "HEAD"
+        if(-not (Test-Path $GoodFile)){Good $head}
+        Log "SERVER ONLINE: http://127.0.0.1:$Port ; revision=$head"
     }
-
-    if (-not (Is-Healthy)) {
-        try {
-            Log "Initial LEDERG health check failed. Restarting the application."
-            Start-LedergServer
-        } catch {
-            Log "Initial start failed: $($_.Exception.Message)"
-        }
-    }
-
-    Update-Once
-
-    if (-not $Once) {
-        while ($true) {
-            Start-Sleep -Seconds 60
-            try {
-                Update-Once
-            } catch {
-                Log "AUTOPILOT CYCLE FAILED: $($_.Exception.Message)"
-            }
-        }
+    while($true){
+        try{UpdateCycle}catch{Log "Cycle failed: $($_.Exception.Message)"}
+        Start-Sleep -Seconds $CheckSeconds
     }
 } catch {
     Log "FATAL: $($_.Exception.Message)"
     exit 1
 } finally {
-    try { $mutex.ReleaseMutex() | Out-Null } catch {}
+    try{StopServer}catch{}
+    try{$mutex.ReleaseMutex()|Out-Null}catch{}
     $mutex.Dispose()
 }
