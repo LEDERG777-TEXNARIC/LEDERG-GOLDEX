@@ -521,7 +521,7 @@ async function saveProfile(){
    }else if($('removeAvatar')?.checked){
      state.user=await api('/api/users/me/avatar',{method:'DELETE'});
    }
-   applyMyProfile();await loadChats();$('setSaveStatus').textContent='Сохранено';
+   applyMyProfile();await loadChats();if($('setSaveStatus'))$('setSaveStatus').textContent='Сохранено';
  }catch(e){$('setSaveStatus').textContent=e.message}
 }
 function toggleEl(el){el.dataset.on=el.dataset.on==='1'?'0':'1';el.classList.toggle('on',el.dataset.on==='1')}
