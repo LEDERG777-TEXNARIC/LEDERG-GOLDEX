@@ -201,6 +201,8 @@ body.light .settings-nav button.active{color:var(--text)}
     <button data-section="appearance">Оформление</button>
     <button data-section="security">Безопасность</button>
     <button data-section="notifications">Уведомления</button>
+    <button data-section="media">Медиа</button>
+    <button data-section="calls">Звонки</button>
    </nav>
    <div id="settingsContent" class="settings-content"></div>
   </div>
@@ -261,7 +263,13 @@ const state={
  requires2fa:false,
  textSize:localStorage.getItem('lederg_text_size')||'16',
  animations:localStorage.getItem('lederg_animations')!=='0',
- sendByEnter:localStorage.getItem('lederg_send_enter')!=='0'
+ sendByEnter:localStorage.getItem('lederg_send_enter')!=='0',
+ autoDownload:localStorage.getItem('lederg_autodownload')!=='0',
+ autoplayVideo:localStorage.getItem('lederg_autoplay_video')!=='0',
+ autoplayGif:localStorage.getItem('lederg_autoplay_gif')!=='0',
+ blurWallpaper:localStorage.getItem('lederg_blur_wallpaper')==='1',
+ p2pCalls:localStorage.getItem('lederg_p2p_calls')!=='0',
+ iceServers:[{urls:'stun:stun.cloudflare.com:3478'}]
 };
 const $=id=>document.getElementById(id);
 
@@ -537,6 +545,19 @@ function renderSettings(section){
    $('setSendEnter').onclick=()=>{toggleEl($('setSendEnter'));state.sendByEnter=$('setSendEnter').dataset.on==='1';localStorage.setItem('lederg_send_enter',state.sendByEnter)};
    return;
  }
+ if(section==='media'){
+   c.innerHTML='<div class="setting-section"><div class="setting-title">Медиа</div>'+settingToggle('setAutoDownload','Автозагрузка медиа','Разрешить автоматическую загрузку поддерживаемых вложений.',state.autoDownload)+settingToggle('setAutoplayVideo','Автовоспроизведение видео','Автоматически запускать видео после загрузки.',state.autoplayVideo)+settingToggle('setAutoplayGif','Автовоспроизведение GIF','Автоматически воспроизводить GIF-анимации.',state.autoplayGif)+'</div><div class="notice">Эти параметры хранятся локально на текущем устройстве.</div>';
+   $('setAutoDownload').onclick=()=>{toggleEl($('setAutoDownload'));state.autoDownload=$('setAutoDownload').dataset.on==='1';localStorage.setItem('lederg_autodownload',state.autoDownload?'1':'0')};
+   $('setAutoplayVideo').onclick=()=>{toggleEl($('setAutoplayVideo'));state.autoplayVideo=$('setAutoplayVideo').dataset.on==='1';localStorage.setItem('lederg_autoplay_video',state.autoplayVideo?'1':'0')};
+   $('setAutoplayGif').onclick=()=>{toggleEl($('setAutoplayGif'));state.autoplayGif=$('setAutoplayGif').dataset.on==='1';localStorage.setItem('lederg_autoplay_gif',state.autoplayGif?'1':'0')};
+   return;
+ }
+ if(section==='calls'){
+   c.innerHTML='<div class="setting-section"><div class="setting-title">Звонки</div>'+settingToggle('setAllowCalls','Разрешать звонки','Другие пользователи смогут инициировать звонки.',state.user.allow_calls)+settingToggle('setP2PCalls','Прямое P2P','Использовать прямой ICE-маршрут, когда он доступен. Выключение требует TURN.',state.p2pCalls)+'</div><div class="notice">Сигналинг звонка идёт через LEDERG WebSocket. Медиа идёт напрямую между браузерами либо через TURN, если он настроен.</div>';
+   $('setAllowCalls').onclick=async()=>{toggleEl($('setAllowCalls'));state.user.allow_calls=$('setAllowCalls').dataset.on==='1';await saveProfile()};
+   $('setP2PCalls').onclick=()=>{toggleEl($('setP2PCalls'));state.p2pCalls=$('setP2PCalls').dataset.on==='1';localStorage.setItem('lederg_p2p_calls',state.p2pCalls?'1':'0')};
+   return;
+ }
  if(section==='notifications'){
    c.innerHTML='<div class="setting-section"><div class="setting-title">Уведомления и звук</div>'+settingToggle('setNotify','Уведомления','Включены по умолчанию.',state.notificationEnabled)+settingToggle('setNotifyPrivate','Личные сообщения','Уведомлять о новых ЛС.',state.notificationPrivate)+settingToggle('setNotifySound','Звук LEDERG','Кастомный трёхнотный сигнал.',state.notificationSound)+settingToggle('setNotifyPreview','Показывать текст','Показывать текст сообщения в системном уведомлении.',state.notificationPreview)+'</div><div class="settings-actions"><button id="testNotifySound" class="secondary">Тест LEDERG-звука</button><button id="askNotifyPermission" class="secondary">Запросить разрешение</button></div><div id="notifyPermissionStatus" class="notice" style="margin-top:12px"></div>';
    $('setNotify').onclick=async()=>{toggleEl($('setNotify'));state.notificationEnabled=$('setNotify').dataset.on==='1';localStorage.setItem('lederg_notify',state.notificationEnabled?'1':'0');if(state.notificationEnabled&&'Notification'in window&&Notification.permission==='default')await Notification.requestPermission();};
@@ -665,7 +686,7 @@ $('blockChatUserBtn').onclick=async()=>{const uid=state.activeChat?.peer?.id;if(
 document.querySelectorAll('.quick-wall').forEach(b=>b.onclick=async()=>{if(b.dataset.wall==='gradient'){$('messages').style.backgroundImage='linear-gradient(135deg,rgba(24,70,105,.95),rgba(17,28,42,.98))'}else applyWallpaper(null)});
 window.addEventListener('resize',()=>{if(innerWidth>760){$('sidebar').classList.remove('hidden');$('chatPane').classList.remove('open')}});
 window.addEventListener('beforeunload',()=>{try{state.ws?.close()}catch{}});
-async function boot(){try{await loadMe();setTheme(state.theme);applyClientPrefs();showApp();await loadChats();connectWS();if(state.notificationEnabled&&'Notification' in window&&Notification.permission==='default'){setTimeout(()=>requestNotificationPermission(),700)}}catch(e){showAuth()}}
+async function boot(){try{await loadMe();await loadCallConfig();setTheme(state.theme);applyClientPrefs();showApp();await loadChats();connectWS();if(state.notificationEnabled&&'Notification' in window&&Notification.permission==='default'){setTimeout(()=>requestNotificationPermission(),700)}}catch(e){showAuth()}}
 setAuthMode('login');setTheme(state.theme);applyClientPrefs();
 if(state.token)boot();else showAuth();
 </script>
