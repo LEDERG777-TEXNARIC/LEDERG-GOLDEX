@@ -273,8 +273,13 @@ def sessions(me=Depends(current_user)):
     with SessionLocal() as db:
         rows=db.scalars(select(Session).where(Session.user_id==me["id"]).order_by(Session.created_at.desc())).all()
         return [{
-            "id":s.id,"created_at":s.created_at.isoformat(),"last_seen_at":s.last_seen_at.isoformat(),
-            "current":s.id==me["session_id"],"revoked":s.revoked
+            "id": s.id,
+            "created_at": s.created_at.isoformat(),
+            "last_seen_at": s.last_seen_at.isoformat(),
+            "device_name": s.device_name or "LEDERG device",
+            "remembered": bool(s.remembered),
+            "current": s.id == me["session_id"],
+            "revoked": s.revoked,
         } for s in rows]
 
 @router.delete("/sessions/{session_id}")
