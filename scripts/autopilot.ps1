@@ -164,7 +164,8 @@ function UpdateCycle {
         Log "UPDATE ERROR: $($_.Exception.Message)"
         try {
             StopServer
-            $rollback=$local
+            $rollback=$good
+            if(-not $rollback){ $rollback=$local }
             if(-not $rollback){ $rollback="HEAD~1" }
             if(Test-Path $GoodFile){
                 $candidate=(Get-Content $GoodFile -Raw).Trim()
