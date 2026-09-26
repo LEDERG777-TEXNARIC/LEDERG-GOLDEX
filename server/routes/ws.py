@@ -2,7 +2,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 import jwt
 from server.config import settings
 from server.db.session import SessionLocal
-from server.models import ChatMember, User
+from server.models import ChatMember, User, Session
 from sqlalchemy import select, and_
 
 router = APIRouter()
@@ -74,7 +74,7 @@ async def websocket(ws: WebSocket):
         sid = payload.get("sid")
         if sid:
             with SessionLocal() as db:
-                row = db.get(__import__("server.models", fromlist=["Session"]).Session, sid)
+                row = db.get(Session, sid)
                 if not row or row.revoked or row.user_id != uid:
                     raise ValueError("revoked")
     except Exception:
