@@ -500,15 +500,20 @@ function sendWS(data){if(state.ws?.readyState===WebSocket.OPEN)state.ws.send(JSO
 function logout(){localStorage.removeItem('lederg_token');state.token=null;state.user=null;state.ws?.close();state.ws=null;showAuth()}
 async function saveProfile(){
  const fd=new FormData();
- fd.append('username',$('setUsername').value.trim());
- fd.append('display_name',$('setDisplayName').value.trim());
- fd.append('bio',$('setBio').value);
- for(const id of ['setDiscoverable','setPresence','setAvatarPublic','setReadReceipts','setAllowMessages','setAllowCalls']){
-   const key=id==='setDiscoverable'?'discoverable':id==='setPresence'?'presence_visible':id==='setAvatarPublic'?'avatar_public':id==='setReadReceipts'?'read_receipts':id==='setAllowMessages'?'allow_messages':'allow_calls';
-   fd.append(key,$(id).dataset.on==='1'?'true':'false');
+ const fields=[
+  ['setUsername','username'],['setDisplayName','display_name'],['setBio','bio'],
+  ['setDiscoverable','discoverable'],['setPresence','presence_visible'],
+  ['setAvatarPublic','avatar_public'],['setReadReceipts','read_receipts'],
+  ['setAllowMessages','allow_messages'],['setAllowCalls','allow_calls']
+ ];
+ for(const [id,key] of fields){
+   const el=$(id);
+   if(!el)continue;
+   if(el.classList?.contains('toggle')) fd.append(key,el.dataset.on==='1'?'true':'false');
+   else fd.append(key,el.value);
  }
  try{
-   state.user=await api('/api/users/me',{method:'PUT',body:fd});
+   if([...fd.keys()].length) state.user=await api('/api/users/me',{method:'PUT',body:fd});
    const file=$('avatarFile')?.files?.[0];
    if(file){
      const x=new FormData();x.append('avatar',file);
@@ -603,7 +608,12 @@ async function render2FA(){
   };
  }
 }
-async function requestNotificationPermission(){if(!('Notification' in window))return;try{const p=await Notification.requestPermission();state.notificationPermission=p;if($('notifyPermissionStatus'))$('notifyPermissionStatus').textContent='Разрешение браузера: '+p}catch{}}
+function updateNotifyPrompt(){
+ const p=$('notifyPrompt');if(!p)return;
+ if(!('Notification' in window)){p.style.display='none';return}
+ p.style.display=state.notificationEnabled&&Notification.permission==='default'?'block':'none';
+}
+async function requestNotificationPermission(){if(!('Notification' in window))return;try{const p=await Notification.requestPermission();state.notificationPermission=p;if($('notifyPermissionStatus'))$('notifyPermissionStatus').textContent='Разрешение браузера: '+p;updateNotifyPrompt()}catch{}}
 function playNotificationSound(){if(!state.notificationSound)return;try{const C=window.AudioContext||window.webkitAudioContext;if(!C)return;const ctx=new C(),t=ctx.currentTime;[659.25,783.99,987.77].forEach((f,i)=>{const o=ctx.createOscillator(),g=ctx.createGain();o.type='sine';o.frequency.value=f;g.gain.setValueAtTime(.0001,t+i*.08);g.gain.exponentialRampToValueAtTime(.12,t+i*.08+.015);g.gain.exponentialRampToValueAtTime(.0001,t+i*.08+.22);o.connect(g);g.connect(ctx.destination);o.start(t+i*.08);o.stop(t+i*.08+.24)});setTimeout(()=>ctx.close().catch(()=>{}),700)}catch{}}
 function openSettings(section=state.activeSettings){$('settingsModal').style.display='grid';renderSettings(section)}
 function closeSettings(){$('settingsModal').style.display='none'}
@@ -653,6 +663,8 @@ $('authForm').onsubmit=async e=>{
 };
 
 $('settingsBtn').onclick=()=>openSettings();
+$('notifyAllowBtn').onclick=()=>requestNotificationPermission();
+$('notifyLaterBtn').onclick=()=>{$('notifyPrompt').style.display='none'};
 $('settingsClose').onclick=closeSettings;
 $('settingsModal').onclick=e=>{if(e.target===$('settingsModal'))closeSettings()};
 document.querySelectorAll('.settings-nav button').forEach(b=>b.onclick=()=>renderSettings(b.dataset.section));
@@ -686,9 +698,11 @@ $('blockChatUserBtn').onclick=async()=>{const uid=state.activeChat?.peer?.id;if(
 document.querySelectorAll('.quick-wall').forEach(b=>b.onclick=async()=>{if(b.dataset.wall==='gradient'){$('messages').style.backgroundImage='linear-gradient(135deg,rgba(24,70,105,.95),rgba(17,28,42,.98))'}else applyWallpaper(null)});
 window.addEventListener('resize',()=>{if(innerWidth>760){$('sidebar').classList.remove('hidden');$('chatPane').classList.remove('open')}});
 window.addEventListener('beforeunload',()=>{try{state.ws?.close()}catch{}});
-async function boot(){try{await loadMe();await loadCallConfig();setTheme(state.theme);applyClientPrefs();showApp();await loadChats();connectWS();if(state.notificationEnabled&&'Notification' in window&&Notification.permission==='default'){setTimeout(()=>requestNotificationPermission(),700)}}catch(e){showAuth()}}
+async function boot(){try{await loadMe();await loadCallConfig();setTheme(state.theme);applyClientPrefs();showApp();await loadChats();connectWS();updateNotifyPrompt()}catch(e){showAuth()}}
 setAuthMode('login');setTheme(state.theme);applyClientPrefs();
 if(state.token)boot();else showAuth();
 </script>
+<div id="notifyPrompt" style="display:none;position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:250;width:min(520px,calc(100% - 24px));background:var(--panel);border:1px solid var(--line);border-radius:17px;padding:13px 14px;box-shadow:var(--shadow)"><div style="display:flex;align-items:center;gap:12px"><div style="font-size:20px">🔔</div><div style="flex:1"><div style="font-weight:800">Разрешить уведомления LEDERG?</div><div class="preview">Уведомления и звук включены по умолчанию. Разрешение можно изменить в браузере.</div></div><button id="notifyAllowBtn" class="primary" style="width:auto;padding:10px 14px">Разрешить</button><button id="notifyLaterBtn" class="secondary">Позже</button></div></div>
+
 </body>
 </html>
