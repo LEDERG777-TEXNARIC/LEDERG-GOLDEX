@@ -1,52 +1,29 @@
 @echo off
-setlocal
-set "APP_DIR=C:\LEDERG-MESSENGER"
-set "REPO_URL=https://github.com/LEDERG777-TEXNARIC/LEDERG-GOLDEX.git"
-set "BRANCH=main"
-set "DATA_DIR=C:\LEDERG-MESSENGER-DATA"
-if not exist "%DATA_DIR%" mkdir "%DATA_DIR%"
-if not exist "%DATA_DIR%\logs" mkdir "%DATA_DIR%\logs"
+setlocal EnableExtensions
+set "BOOT_DIR=C:\LEDERG-MESSENGER-BOOT"
+set "RUNNER=%BOOT_DIR%\autopilot.ps1"
+set "TMP=%BOOT_DIR%\autopilot.ps1.new"
+set "RAW=https://raw.githubusercontent.com/LEDERG777-TEXNARIC/LEDERG-GOLDEX/main/scripts/autopilot.ps1"
 
-where git >nul 2>nul
-if errorlevel 1 (
-  echo [ERROR] Git not found in PATH.
-  exit /b 1
-)
-where powershell >nul 2>nul
-if errorlevel 1 (
-  echo [ERROR] PowerShell not found.
-  exit /b 1
-)
+if not exist "%BOOT_DIR%" mkdir "%BOOT_DIR%"
 
-if not exist "%APP_DIR%\.git" (
-  if exist "%APP_DIR%" ren "%APP_DIR%" "LEDERG-MESSENGER_old_%RANDOM%"
-  echo [BOOTSTRAP] Cloning LEDERG-GOLDEX...
-  git clone --branch "%BRANCH%" "%REPO_URL%" "%APP_DIR%"
-  if errorlevel 1 (
-    echo [ERROR] Clone failed.
+where powershell.exe >nul 2>nul
+if errorlevel 1 (
+    echo [ERROR] PowerShell not found.
     exit /b 1
-  )
+)
+
+echo [LEDERG] Downloading latest autopilot...
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $u='%RAW%'; $p='%TMP%'; $c=(Invoke-WebRequest -UseBasicParsing -Uri $u -TimeoutSec 20).Content; if([string]::IsNullOrWhiteSpace($c)){throw 'Empty runner'}; [IO.File]::WriteAllText($p,$c,[Text.Encoding]::UTF8)"
+if errorlevel 1 (
+    if not exist "%RUNNER%" (
+        echo [ERROR] GitHub unavailable and no cached autopilot exists.
+        exit /b 1
+    )
+    echo [WARN] GitHub unavailable. Starting cached autopilot.
 ) else (
-  git -C "%APP_DIR%" remote set-url origin "%REPO_URL%" >nul 2>&1
-  if not exist "%APP_DIR%\scripts\autopilot.ps1" (
-    echo [BOOTSTRAP] Updating local launcher files...
-    git -C "%APP_DIR%" fetch origin "%BRANCH%" --prune
-    if errorlevel 1 (
-      echo [ERROR] GitHub fetch failed.
-      exit /b 1
-    )
-    git -C "%APP_DIR%" reset --hard "origin/%BRANCH%"
-    if errorlevel 1 (
-      echo [ERROR] Bootstrap update failed.
-      exit /b 1
-    )
-  )
+    move /Y "%TMP%" "%RUNNER%" >nul
 )
 
-if not exist "%APP_DIR%\scripts\autopilot.ps1" (
-  echo [ERROR] autopilot.ps1 is missing after bootstrap.
-  exit /b 1
-)
-
-powershell -NoProfile -ExecutionPolicy Bypass -File "%APP_DIR%\scripts\autopilot.ps1"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%RUNNER%"
 exit /b %errorlevel%
