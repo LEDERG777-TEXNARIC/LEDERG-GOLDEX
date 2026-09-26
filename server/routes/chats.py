@@ -3,10 +3,10 @@ from pathlib import Path
 import secrets
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from pydantic import BaseModel, Field
-from sqlalchemy import select, and_, desc
+from sqlalchemy import select, and_, desc, or_
 from server.config import settings
 from server.db.session import SessionLocal
-from server.models import Chat, ChatMember, ChatPreference, Message, User
+from server.models import Chat, ChatMember, ChatPreference, Message, User, Block
 from server.auth import current_user
 from server.routes.ws import broadcast_to_users, user_is_online
 
@@ -111,6 +111,16 @@ async def create_chat(data: ChatCreate, me=Depends(current_user)):
                 raise HTTPException(404, "User not found")
             if not target.allow_messages:
                 raise HTTPException(403, "This user does not accept new messages")
+            blocked = db.scalar(
+                select(Block.id).where(
+                    or_(
+                        and_(Block.blocker_id == me["id"], Block.blocked_id == data.user_id),
+                        and_(Block.blocker_id == data.user_id, Block.blocked_id == me["id"]),
+                    )
+                )
+            )
+            if blocked:
+                raise HTTPException(403, "Messaging is unavailable for this user")
 
             direct_chats = db.scalars(
                 select(Chat)
@@ -183,13 +193,23 @@ async def send_message(chat_id: int, data: MessageIn, me=Depends(current_user)):
         if not is_member(db, chat_id, me["id"]):
             raise HTTPException(403, "Not a chat member")
 
+        member_ids = db.scalars(select(ChatMember.user_id).where(ChatMember.chat_id == chat_id)).all()
+        if len(member_ids) == 2:
+            other_id = next((uid for uid in member_ids if uid != me["id"]), None)
+            if other_id is not None:
+                blocked = db.scalar(select(Block.id).where(or_(
+                    and_(Block.blocker_id == me["id"], Block.blocked_id == other_id),
+                    and_(Block.blocker_id == other_id, Block.blocked_id == me["id"]),
+                )))
+                if blocked:
+                    raise HTTPException(403, "Messaging is blocked")
+
         msg = Message(chat_id=chat_id, sender_id=me["id"], text=text_value, created_at=now())
         db.add(msg)
         db.commit()
         db.refresh(msg)
 
         sender = db.get(User, me["id"])
-        member_ids = db.scalars(select(ChatMember.user_id).where(ChatMember.chat_id == chat_id)).all()
         payload = message_payload(msg, sender)
 
     await broadcast_to_users(member_ids, {"type": "new_message", "message": payload})
@@ -259,6 +279,21 @@ async def set_wallpaper(chat_id: int, wallpaper: UploadFile = File(...), me=Depe
         except OSError:
             pass
     return {"ok": True, "wallpaper_url": f"/media/{rel}"}
+
+@router.post("/chats/{chat_id}/mute")
+def set_mute(chat_id: int, muted: bool = Query(...), me=Depends(current_user)):
+    with SessionLocal() as db:
+        if not is_member(db, chat_id, me["id"]):
+            raise HTTPException(403, "Not a chat member")
+        pref = db.scalar(select(ChatPreference).where(
+            ChatPreference.chat_id == chat_id, ChatPreference.user_id == me["id"]
+        ))
+        if not pref:
+            pref = ChatPreference(chat_id=chat_id, user_id=me["id"])
+            db.add(pref)
+        pref.muted = muted
+        db.commit()
+    return {"ok": True, "muted": muted}
 
 @router.delete("/chats/{chat_id}/wallpaper")
 def clear_wallpaper(chat_id: int, me=Depends(current_user)):
