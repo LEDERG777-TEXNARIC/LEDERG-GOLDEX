@@ -186,6 +186,27 @@ def unblock_user(user_id: int, me=Depends(current_user)):
             db.commit()
         return {"ok": True}
 
+@router.get("/search")
+def search(q: str = Query(min_length=1, max_length=64), me=Depends(current_user)):
+    value = q.strip().lstrip("@").lower()
+    if not value:
+        return []
+    needle = f"%{value}%"
+    with SessionLocal() as db:
+        blocked_ids = select(BlockedUser.blocked_id).where(BlockedUser.blocker_id == me["id"])
+        blocker_ids = select(BlockedUser.blocker_id).where(BlockedUser.blocked_id == me["id"])
+        rows = db.scalars(
+            select(User).where(
+                User.is_active.is_(True),
+                User.search_visible.is_(True),
+                User.id != me["id"],
+                User.id.not_in(blocked_ids),
+                User.id.not_in(blocker_ids),
+                or_(User.username.ilike(needle), User.display_name.ilike(needle)),
+            ).order_by(User.username).limit(30)
+        ).all()
+        return [public_user(db, u, me["id"]) for u in rows]
+
 @router.get("/{user_id}")
 def get_user(user_id: int, me=Depends(current_user)):
     with SessionLocal() as db:
@@ -208,23 +229,3 @@ def get_avatar(user_id: int, me=Depends(current_user)):
             raise HTTPException(404, "Avatar not found")
         return FileResponse(path, headers={"Cache-Control": "private, max-age=300"})
 
-@router.get("/search")
-def search(q: str = Query(min_length=1, max_length=64), me=Depends(current_user)):
-    value = q.strip().lstrip("@").lower()
-    if not value:
-        return []
-    needle = f"%{value}%"
-    with SessionLocal() as db:
-        blocked_ids = select(BlockedUser.blocked_id).where(BlockedUser.blocker_id == me["id"])
-        blocker_ids = select(BlockedUser.blocker_id).where(BlockedUser.blocked_id == me["id"])
-        rows = db.scalars(
-            select(User).where(
-                User.is_active.is_(True),
-                User.search_visible.is_(True),
-                User.id != me["id"],
-                User.id.not_in(blocked_ids),
-                User.id.not_in(blocker_ids),
-                or_(User.username.ilike(needle), User.display_name.ilike(needle)),
-            ).order_by(User.username).limit(30)
-        ).all()
-        return [public_user(db, u, me["id"]) for u in rows]
