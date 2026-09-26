@@ -34,6 +34,21 @@ body.light{--bg:#edf2f7;--panel:#fff;--panel2:#f3f6fa;--line:#d8e0e8;--text:#172
 .field:focus,.search:focus,.settings-input:focus,.settings-select:focus,.settings-textarea:focus{border-color:var(--accent)}
 .primary{width:100%;padding:13px;border-radius:13px;background:var(--accent);color:#fff;font-weight:800;margin-top:5px}
 .error{min-height:20px;margin-top:10px;color:#ff8390;font-size:13px}
+.auth-label{display:block;font-size:12px;color:var(--muted);font-weight:700;margin:0 0 6px}
+.auth-hint{font-size:11px;color:var(--muted);margin:-3px 2px 10px}
+.password-wrap{position:relative;margin-bottom:10px}
+.password-wrap .field{margin-bottom:0;padding-right:50px}
+.password-action{position:absolute;right:6px;top:6px;width:38px;height:38px;border-radius:10px;background:transparent;color:var(--muted)}
+.password-action:hover{background:var(--panel);color:var(--text)}
+.auth-tools{display:flex;gap:8px;margin:-2px 0 10px}
+.auth-tools button{flex:1}
+.auth-check{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin:5px 2px 11px}
+.auth-check input{accent-color:var(--accent);width:16px;height:16px}
+.auth-strength{height:6px;border-radius:99px;background:var(--panel2);overflow:hidden;margin:6px 0 4px}
+.auth-strength i{display:block;height:100%;width:0;background:var(--accent);transition:width .2s ease}
+.auth-strength-text{font-size:11px;color:var(--muted);min-height:15px}
+.auth-footer{font-size:11px;color:var(--muted);line-height:1.5;margin-top:12px;text-align:center}
+.auth-card .secondary{border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:12px;padding:10px 12px;font-weight:700}
 .app{height:100%;display:grid;grid-template-columns:350px 1fr;overflow:hidden}
 .sidebar{border-right:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-width:0}
 .side-top{padding:18px 16px 10px;border-bottom:1px solid var(--line)}
@@ -130,13 +145,45 @@ body.light .settings-nav button.active{color:var(--text)}
     <div class="logo">LEDERG</div>
     <div class="sub">Приватный self-hosted мессенджер</div>
     <div class="tabs"><button id="tabLogin" class="active">Вход</button><button id="tabRegister">Регистрация</button></div>
-    <form id="authForm">
-      <input id="username" class="field" autocomplete="username" placeholder="Никнейм" required>
-      <input id="displayName" class="field" autocomplete="name" placeholder="Имя" style="display:none">
-      <input id="password" class="field" type="password" autocomplete="current-password" placeholder="Пароль" required>
-      <input id="otpCode" class="field" inputmode="numeric" autocomplete="one-time-code" placeholder="Код 2FA" maxlength="8" style="display:none">
-      <button class="primary" id="authButton">Войти</button>
+    <form id="authForm" novalidate>
+      <label id="displayNameLabel" class="auth-label" style="display:none" for="displayName">Имя</label>
+      <input id="displayName" class="field" autocomplete="name" placeholder="Как тебя будут видеть" style="display:none">
+
+      <label class="auth-label" for="username">Никнейм</label>
+      <input id="username" class="field" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="@username" required>
+      <div class="auth-hint">3–32 символа: латиница, цифры, _, - и . Можно вводить с @.</div>
+
+      <label class="auth-label" for="password">Пароль</label>
+      <div class="password-wrap">
+        <input id="password" class="field" type="password" autocomplete="current-password" placeholder="Минимум 8 символов" required>
+        <button id="passwordToggle" class="password-action" type="button" aria-label="Показать пароль">◉</button>
+      </div>
+
+      <div id="registerPasswordTools" style="display:none">
+        <div class="auth-tools">
+          <button id="generatePassword" class="secondary" type="button">🔐 Сгенерировать</button>
+          <button id="copyPassword" class="secondary" type="button">📋 Копировать</button>
+        </div>
+        <div class="auth-strength"><i id="passwordStrengthBar"></i></div>
+        <div id="passwordStrengthText" class="auth-strength-text"></div>
+
+        <label class="auth-label" for="passwordConfirm" style="margin-top:9px">Повтор пароля</label>
+        <div class="password-wrap">
+          <input id="passwordConfirm" class="field" type="password" autocomplete="new-password" placeholder="Повтори пароль">
+          <button id="passwordConfirmToggle" class="password-action" type="button" aria-label="Показать повтор пароля">◉</button>
+        </div>
+      </div>
+
+      <div id="otpWrap" style="display:none">
+        <label class="auth-label" for="otpCode">Код двухэтапной проверки</label>
+        <input id="otpCode" class="field" inputmode="numeric" autocomplete="one-time-code" placeholder="6 цифр" maxlength="8">
+      </div>
+
+      <label class="auth-check"><input id="rememberDevice" type="checkbox" checked> <span>Запомнить это устройство</span></label>
+
+      <button class="primary" id="authButton" type="submit">Войти</button>
       <div id="authError" class="error"></div>
+      <div id="authHelp" class="auth-footer">Сессия хранится на этом устройстве. Ею можно управлять в разделе «Безопасность → Активные сессии».</div>
     </form>
   </div>
 </div>
