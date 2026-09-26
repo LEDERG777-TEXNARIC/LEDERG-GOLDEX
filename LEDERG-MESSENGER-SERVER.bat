@@ -10,6 +10,8 @@ set "HOST=0.0.0.0"
 set "PORT=8000"
 set "CHECK_SECONDS=30"
 set "RESTART_SECONDS=3"
+set "DB_CHECK_EVERY=2"
+set "DB_CYCLE=0"
 set "SERVER_PID="
 
 echo ============================================================
@@ -53,6 +55,16 @@ if errorlevel 2 (
     if errorlevel 1 echo [GIT] Update failed. Starting current local revision.
 )
 
+call :DB_GUARD
+if errorlevel 20 (
+    echo [DB] Critical database state detected before start.
+    call :DB_REPAIR
+    if errorlevel 1 (
+        echo [DB] Automatic repair failed. Retrying...
+        timeout /t %RESTART_SECONDS% /nobreak >nul
+        goto MAIN
+    )
+)
 call :FREE_PORT
 if errorlevel 1 (
     echo [PORT] Could not free port %PORT%.
@@ -60,7 +72,35 @@ if errorlevel 1 (
     goto MAIN
 )
 
-call :START_SERVER
+call :DB_GUARD
+cd /d "%APP_DIR%"
+echo [DB] Intelligent database guard...
+"%PYTHON%" "%APP_DIR%\scripts\db_maintenance.py"
+if errorlevel 20 (
+    echo [DB] Guard reports corruption or an unsafe database state.
+    exit /b 20
+)
+if errorlevel 1 (
+    echo [DB] Guard could not complete. Current database will be kept; retrying later.
+    exit /b 1
+)
+echo [DB] Database healthy, schema normalized, verified backup maintained.
+exit /b 0
+
+
+:DB_REPAIR
+cd /d "%APP_DIR%"
+echo [DB] Starting automatic database repair...
+"%PYTHON%" "%APP_DIR%\scripts\db_maintenance.py" --repair
+if errorlevel 1 (
+    echo [DB] Automatic repair FAILED.
+    exit /b 1
+)
+echo [DB] Automatic repair completed.
+exit /b 0
+
+
+:START_SERVER
 if errorlevel 1 (
     echo [SERVER] run.py failed to open port %PORT%.
     timeout /t %RESTART_SECONDS% /nobreak >nul
@@ -69,6 +109,26 @@ if errorlevel 1 (
 
 :MONITOR
 timeout /t %CHECK_SECONDS% /nobreak >nul
+
+set /a DB_CYCLE+=1
+if !DB_CYCLE! GEQ %DB_CHECK_EVERY% (
+    set "DB_CYCLE=0"
+    call :DB_GUARD
+    if errorlevel 20 (
+        echo.
+        echo ============================================================
+        echo [%DATE% %TIME%] DATABASE WATCHDOG ALERT
+        echo ============================================================
+        call :STOP_SERVER
+        call :DB_REPAIR
+        if errorlevel 1 (
+            echo [DB] Repair failed. Autopilot will retry automatically.
+            timeout /t %RESTART_SECONDS% /nobreak >nul
+            goto MAIN
+        )
+        goto MAIN
+    )
+)
 
 call :SERVER_ALIVE
 if errorlevel 1 (
@@ -150,6 +210,7 @@ echo.
 
 set "LEDERG_HOST=%HOST%"
 set "LEDERG_PORT=%PORT%"
+set "LEDERG_AUTOPILOT=1"
 set "SERVER_PID="
 
 start "" /B "%PYTHON%" -u "%APP_DIR%\run.py"
