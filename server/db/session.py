@@ -1,5 +1,5 @@
 from pathlib import Path
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from server.config import settings
 
@@ -7,7 +7,6 @@ class Base(DeclarativeBase):
     pass
 
 Path(settings.data_dir).mkdir(parents=True, exist_ok=True)
-
 engine = create_engine(
     f"sqlite:///{settings.db_path}",
     connect_args={"check_same_thread": False, "timeout": 30},
@@ -25,33 +24,25 @@ def sqlite_pragmas(dbapi_connection, connection_record):
     cur.execute("PRAGMA temp_store=MEMORY")
     cur.close()
 
-def _ensure_column(conn, table: str, column: str, ddl: str):
-    columns = {row[1] for row in conn.execute(text(f'PRAGMA table_info("{table}")')).fetchall()}
-    if column not in columns:
-        conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {ddl}'))
-
-def _migrate_existing_schema():
-    with engine.begin() as conn:
-        for column, ddl in [
-            ("avatar_path", "VARCHAR(255)"),
-            ("bio", "VARCHAR(160)"),
-            ("online_visibility", "VARCHAR(16) NOT NULL DEFAULT 'everyone'"),
-            ("avatar_visibility", "VARCHAR(16) NOT NULL DEFAULT 'everyone'"),
-            ("search_visible", "BOOLEAN NOT NULL DEFAULT 1"),
-            ("read_receipts", "BOOLEAN NOT NULL DEFAULT 1"),
-            ("typing_visibility", "BOOLEAN NOT NULL DEFAULT 1"),
-            ("session_version", "INTEGER NOT NULL DEFAULT 0"),
-            ("last_seen_at", "DATETIME"),
-            ("crypto_public_key", "TEXT"),
-        ]:
-            _ensure_column(conn, "users", column, ddl)
-        for column, ddl in [
-            ("is_encrypted", "BOOLEAN NOT NULL DEFAULT 0"),
-            ("deleted_at", "DATETIME"),
-        ]:
-            _ensure_column(conn, "messages", column, ddl)
+def _add_missing_user_columns(conn):
+    existing = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(users)").fetchall()}
+    additions = {
+        "bio": "ALTER TABLE users ADD COLUMN bio VARCHAR(160) NOT NULL DEFAULT ''",
+        "avatar_path": "ALTER TABLE users ADD COLUMN avatar_path VARCHAR(255)",
+        "discoverable": "ALTER TABLE users ADD COLUMN discoverable BOOLEAN NOT NULL DEFAULT 1",
+        "presence_visible": "ALTER TABLE users ADD COLUMN presence_visible BOOLEAN NOT NULL DEFAULT 1",
+        "avatar_public": "ALTER TABLE users ADD COLUMN avatar_public BOOLEAN NOT NULL DEFAULT 1",
+        "read_receipts": "ALTER TABLE users ADD COLUMN read_receipts BOOLEAN NOT NULL DEFAULT 1",
+        "allow_messages": "ALTER TABLE users ADD COLUMN allow_messages BOOLEAN NOT NULL DEFAULT 1",
+    }
+    for name, sql in additions.items():
+        if name not in existing:
+            conn.exec_driver_sql(sql)
 
 def init_db():
-    from server.models import User, Chat, ChatMember, BlockedUser, ChatUserSetting, Message
+    from server.models import User, Session, Chat, ChatMember, ChatPreference, Message
     Base.metadata.create_all(bind=engine)
-    _migrate_existing_schema()
+    with engine.begin() as conn:
+        _add_missing_user_columns(conn)
+        conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_users_discoverable_username ON users(discoverable, username)")
+        conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_sessions_user_revoked ON sessions(user_id, revoked)")
