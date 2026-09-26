@@ -1,49 +1,39 @@
-# LEDERG Messenger Self-Healing Autopilot
+# LEDERG Messenger full autopilot
+param([switch]$Once)
+
 $ErrorActionPreference = "Stop"
 
 $RepoUrl = "https://github.com/LEDERG777-TEXNARIC/LEDERG-GOLDEX.git"
 $Branch = "main"
 $AppDir = "C:\LEDERG-MESSENGER"
 $DataDir = "C:\LEDERG-MESSENGER-DATA"
-$BootDir = "C:\LEDERG-MESSENGER-BOOT"
 $BackupDir = Join-Path $DataDir "backups"
 $LogDir = Join-Path $DataDir "logs"
 $LogFile = Join-Path $LogDir "autopilot.log"
 $GoodFile = Join-Path $DataDir "last-known-good.txt"
-$BootRunner = Join-Path $BootDir "autopilot.ps1"
+$GoodHistory = Join-Path $DataDir "known-good-history.txt"
 $Port = 8000
-$TaskName = "LEDERG-MESSENGER"
-$CheckSeconds = 60
+$ServerTask = "LEDERG-MESSENGER"
 $ServerTaskBat = Join-Path $DataDir "start-server.bat"
 
-New-Item -ItemType Directory -Force -Path $DataDir,$BackupDir,$LogDir,$BootDir | Out-Null
+New-Item -ItemType Directory -Force -Path $DataDir,$BackupDir,$LogDir | Out-Null
 
 function Log([string]$Message) {
     $line = "[{0}] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Message
     Add-Content -LiteralPath $LogFile -Value $line -Encoding UTF8
-    Write-Host $line
 }
 
-# Only one supervisor may run. The messenger server is a separate scheduled task.
-$mutex = New-Object System.Threading.Mutex($false, "Global\LEDERG-MESSENGER-AUTOPILOT")
-if (-not $mutex.WaitOne(0)) {
-    Log "Another autopilot instance is already running."
-    exit 0
-}
+$mutex = New-Object System.Threading.Mutex($false,"Global\LEDERG-MESSENGER-AUTOPILOT")
+if (-not $mutex.WaitOne(0)) { exit 0 }
 
-function Git([string[]]$Args) {
+function Run-Git([string[]]$Args) {
     $out = & git @Args 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "git $($Args -join ' ') failed: $out"
-    }
+    if ($LASTEXITCODE -ne 0) { throw "git $($Args -join ' ') failed: $out" }
     return $out
 }
+function Head([string]$Ref) { return (& git -C $AppDir rev-parse $Ref).Trim() }
 
-function Head([string]$Ref) {
-    return (& git -C $AppDir rev-parse $Ref).Trim()
-}
-
-function EnsureRepo {
+function Ensure-Repo {
     if (Test-Path (Join-Path $AppDir ".git")) {
         & git -C $AppDir remote set-url origin $RepoUrl 2>$null | Out-Null
         return
@@ -54,54 +44,57 @@ function EnsureRepo {
         Move-Item $AppDir $old -Force
     }
 
-    Log "Cloning $RepoUrl"
+    Log "Cloning repository."
     & git clone --branch $Branch $RepoUrl $AppDir 2>&1 | ForEach-Object { Log $_ }
-    if ($LASTEXITCODE -ne 0) {
-        throw "Git clone failed"
-    }
+    if ($LASTEXITCODE -ne 0) { throw "Git clone failed" }
 }
 
-function EnsureVenv {
-    $py = Join-Path $AppDir ".venv\Scripts\python.exe"
-    if (-not (Test-Path $py)) {
-        Log "Creating Python virtual environment."
-        & py -3 -m venv (Join-Path $AppDir ".venv") 2>&1 | ForEach-Object { Log $_ }
-        if ($LASTEXITCODE -ne 0) {
-            throw "Python virtual environment creation failed"
-        }
+function Find-PythonLauncher {
+    foreach ($name in @("py.exe","python.exe")) {
+        $cmd = Get-Command $name -ErrorAction SilentlyContinue
+        if ($cmd) { return $cmd.Source }
     }
+    return $null
 }
 
-function InstallDeps {
+function Ensure-Venv {
     $py = Join-Path $AppDir ".venv\Scripts\python.exe"
-    & $py -m pip install -r (Join-Path $AppDir "requirements.txt") --disable-pip-version-check --no-input 2>&1 |
+    if (Test-Path $py) { return $py }
+
+    $launcher = Find-PythonLauncher
+    if (-not $launcher) { throw "Python launcher not found" }
+
+    Log "Creating Python virtual environment."
+    if ($launcher.ToLower().EndsWith("py.exe")) {
+        & $launcher -3 -m venv (Join-Path $AppDir ".venv") 2>&1 | ForEach-Object { Log $_ }
+    } else {
+        & $launcher -m venv (Join-Path $AppDir ".venv") 2>&1 | ForEach-Object { Log $_ }
+    }
+    if ($LASTEXITCODE -ne 0) { throw "Virtual environment creation failed" }
+    return $py
+}
+
+function Install-Dependencies([string]$Py) {
+    & $Py -m pip install -r (Join-Path $AppDir "requirements.txt") --disable-pip-version-check --no-input 2>&1 |
         ForEach-Object { Log $_ }
-    if ($LASTEXITCODE -ne 0) {
-        throw "Dependency installation failed"
-    }
+    if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed" }
 }
 
-function CompileCheck {
-    $py = Join-Path $AppDir ".venv\Scripts\python.exe"
-    & $py -m compileall -q (Join-Path $AppDir "server") (Join-Path $AppDir "run.py")
-    if ($LASTEXITCODE -ne 0) {
-        throw "Python compile check failed"
-    }
+function Compile-Check([string]$Py) {
+    & $Py -m compileall -q (Join-Path $AppDir "server") (Join-Path $AppDir "run.py") 2>&1 |
+        ForEach-Object { Log $_ }
+    if ($LASTEXITCODE -ne 0) { throw "Python compile check failed" }
 }
 
-function DBCheck {
-    $py = Join-Path $AppDir ".venv\Scripts\python.exe"
+function DB-Check([string]$Py) {
     $script = Join-Path $AppDir "scripts\db_maintenance.py"
-    if (Test-Path $script) {
-        & $py $script 2>&1 | ForEach-Object { Log $_ }
-        if ($LASTEXITCODE -ne 0) {
-            throw "Database maintenance failed"
-        }
-    }
+    if (-not (Test-Path $script)) { return }
+    & $Py $script 2>&1 | ForEach-Object { Log $_ }
+    if ($LASTEXITCODE -ne 0) { throw "Database maintenance failed" }
 }
 
-function WriteServerTaskBat {
-    @"
+function Create-Server-Task {
+@"
 @echo off
 cd /d "$AppDir"
 set "LEDERG_HOST=0.0.0.0"
@@ -109,17 +102,20 @@ set "LEDERG_PORT=$Port"
 "$AppDir\.venv\Scripts\python.exe" "$AppDir\run.py" >> "$DataDir\logs\server.log" 2>&1
 "@ | Set-Content -LiteralPath $ServerTaskBat -Encoding ASCII
 
-    & schtasks /Create /TN $TaskName /SC ONSTART /RU SYSTEM /RL HIGHEST /F /TR ('"' + $ServerTaskBat + '"') 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Messenger scheduled task creation failed"
-    }
+    & schtasks /Create /TN $ServerTask /SC ONSTART /RU SYSTEM /RL HIGHEST /F /TR ('"' + $ServerTaskBat + '"') 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Server scheduled task creation failed" }
 }
 
-function StopServer {
-    & schtasks /End /TN $TaskName 2>&1 | Out-Null
+function Start-Server {
+    & schtasks /Run /TN $ServerTask 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Server scheduled task start failed" }
+    Start-Sleep -Seconds 4
+}
+
+function Stop-Server {
+    & schtasks /End /TN $ServerTask 2>&1 | Out-Null
     Start-Sleep -Seconds 2
 
-    # Task Scheduler can leave a child python process alive. Kill only this app's run.py.
     try {
         Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
             Where-Object { $_.CommandLine -like "*$AppDir\run.py*" } |
@@ -130,15 +126,7 @@ function StopServer {
     Start-Sleep -Seconds 1
 }
 
-function StartServer {
-    & schtasks /Run /TN $TaskName 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Messenger scheduled task start failed"
-    }
-    Start-Sleep -Seconds 4
-}
-
-function Healthy {
+function Is-Healthy {
     try {
         $r = Invoke-RestMethod "http://127.0.0.1:$Port/health" -TimeoutSec 8
         return ($r.ok -eq $true -and $r.database -eq "ok")
@@ -147,22 +135,17 @@ function Healthy {
     }
 }
 
-function BackupDb {
+function Backup-Database {
     $db = Join-Path $DataDir "lederg.db"
-    if (-not (Test-Path $db)) {
-        return $null
-    }
+    if (-not (Test-Path $db)) { return $null }
 
-    # The server is stopped before this function, so copying DB + WAL sidecars is safe.
-    $stamp = Get-Date -Format yyyyMMdd_HHmmss
+    $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
     $dest = Join-Path $BackupDir "lederg_$stamp.db"
-    Copy-Item $db $dest -Force
 
-    foreach ($suffix in @("-wal", "-shm")) {
+    Copy-Item $db $dest -Force
+    foreach ($suffix in @("-wal","-shm")) {
         $src = "$db$suffix"
-        if (Test-Path $src) {
-            Copy-Item $src "$dest$suffix" -Force
-        }
+        if (Test-Path $src) { Copy-Item $src "$dest$suffix" -Force }
     }
 
     Get-ChildItem $BackupDir -Filter "lederg_*.db" |
@@ -170,19 +153,16 @@ function BackupDb {
         Select-Object -Skip 20 |
         Remove-Item -Force -ErrorAction SilentlyContinue
 
-    Log "DB backup created: $dest"
+    Log "Database backup: $dest"
     return $dest
 }
 
-function RestoreDb([string]$Backup) {
-    if (-not $Backup) {
-        return
-    }
-
+function Restore-Database([string]$Backup) {
+    if (-not $Backup) { return }
     $db = Join-Path $DataDir "lederg.db"
     Copy-Item $Backup $db -Force
 
-    foreach ($suffix in @("-wal", "-shm")) {
+    foreach ($suffix in @("-wal","-shm")) {
         $src = "$Backup$suffix"
         $dst = "$db$suffix"
         if (Test-Path $src) {
@@ -191,194 +171,148 @@ function RestoreDb([string]$Backup) {
             Remove-Item $dst -Force -ErrorAction SilentlyContinue
         }
     }
-
-    Log "DB restored from backup."
+    Log "Database restored from backup."
 }
 
-function SaveKnownGood([string]$Commit) {
+function Read-GoodHistory {
+    if (-not (Test-Path $GoodHistory)) { return @() }
+    return @(
+        Get-Content $GoodHistory |
+        Where-Object { $_ -match "^[0-9a-f]{40}$" } |
+        Select-Object -Unique
+    )
+}
+
+function Record-Good([string]$Commit) {
+    $items = @($Commit) + (Read-GoodHistory)
+    $items = @($items | Select-Object -Unique | Select-Object -First 10)
+    Set-Content -LiteralPath $GoodHistory -Value $items -Encoding ASCII
     Set-Content -LiteralPath $GoodFile -Value $Commit -Encoding ASCII
 }
 
-function ReadKnownGood([string]$Fallback) {
-    if (Test-Path $GoodFile) {
-        $value = (Get-Content $GoodFile -Raw).Trim()
-        if ($value -match "^[0-9a-f]{40}$") {
-            return $value
-        }
+function Best-Rollback([string]$Current) {
+    $items = Read-GoodHistory
+    foreach ($item in $items) {
+        if ($item -ne $Current) { return $item }
     }
-    return $Fallback
+    return $null
 }
 
-function RefreshAutopilot {
-    # Keep the supervisor itself current. If GitHub is unavailable, keep using the cached runner.
-    $rawUrl = "https://raw.githubusercontent.com/LEDERG777-TEXNARIC/LEDERG-GOLDEX/main/scripts/autopilot.ps1"
-    $tmp = Join-Path $BootDir "autopilot.ps1.new"
-    try {
-        $content = (Invoke-WebRequest -UseBasicParsing -Uri $rawUrl -TimeoutSec 15).Content
-        if (-not [string]::IsNullOrWhiteSpace($content)) {
-            [IO.File]::WriteAllText($tmp, $content, [Text.Encoding]::UTF8)
-            Move-Item $tmp $BootRunner -Force
-        }
-    } catch {
-        Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+function Ensure-Task {
+    $supervisor = "C:\LEDERG-MESSENGER-BOOT\supervisor.ps1"
+    if (-not (Test-Path $supervisor)) { return $false }
+    $cmd = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $supervisor + '"'
+    & schtasks /Create /TN "LEDERG-AUTOPILOT" /SC ONSTART /RU SYSTEM /RL HIGHEST /F /TR $cmd 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Log "Could not create autopilot startup task."
+        return $false
     }
-}
-
-function UpdateCycle {
-    Push-Location $AppDir
-    try {
-        Git @("fetch", "origin", $Branch, "--prune") | Out-Null
-
-        $local = Head "HEAD"
-        $remote = Head "origin/$Branch"
-        $good = ReadKnownGood $local
-
-        if ($local -eq $remote) {
-            if (-not (Test-Path $GoodFile)) {
-                SaveKnownGood $local
-            }
-
-            if (Healthy) {
-                return
-            }
-
-            Log "Server unhealthy on current revision $local. Restarting."
-            StopServer
-            WriteServerTaskBat
-            StartServer
-
-            if (Healthy) {
-                Log "Current revision recovered without rollback."
-                return
-            }
-
-            if ($good -and $good -ne $local) {
-                Log "Current revision is still unhealthy. Rolling back to known-good $good."
-                StopServer
-                Git @("reset", "--hard", $good) | Out-Null
-                CompileCheck
-                InstallDeps
-                DBCheck
-                WriteServerTaskBat
-                StartServer
-                if (-not (Healthy)) {
-                    throw "Known-good rollback health check failed"
-                }
-                Log "ROLLBACK SUCCESS: $good"
-                return
-            }
-
-            throw "Current revision health check failed and no older known-good revision exists"
-        }
-
-        Log "NEW REVISION: $local -> $remote ; known-good=$good"
-        StopServer
-        $backup = BackupDb
-
-        Git @("reset", "--hard", $remote) | Out-Null
-        Git @("clean", "-fd") | Out-Null
-        EnsureVenv
-        CompileCheck
-        InstallDeps
-        DBCheck
-        WriteServerTaskBat
-        StartServer
-
-        if (Healthy) {
-            SaveKnownGood $remote
-            Log "UPDATE SUCCESS: $remote"
-            return
-        }
-
-        throw "Health check failed after update"
-    } catch {
-        Log "UPDATE ERROR: $($_.Exception.Message)"
-
-        try {
-            StopServer
-
-            $rollback = ReadKnownGood $local
-            if (-not $rollback) {
-                $rollback = $local
-            }
-            if (-not $rollback) {
-                $rollback = Head "HEAD~1"
-            }
-
-            Log "ROLLBACK TO: $rollback"
-            Git @("reset", "--hard", $rollback) | Out-Null
-            EnsureVenv
-            CompileCheck
-            InstallDeps
-
-            # Only restore a DB when this cycle created a backup.
-            if ($backup) {
-                RestoreDb $backup
-            }
-
-            DBCheck
-            WriteServerTaskBat
-            StartServer
-
-            if (-not (Healthy)) {
-                throw "Rollback health check failed"
-            }
-
-            SaveKnownGood $rollback
-            Log "ROLLBACK SUCCESS: $rollback"
-        } catch {
-            Log "CRITICAL: rollback failed too: $($_.Exception.Message)"
-            try { StopServer } catch {}
-            throw
-        }
-    } finally {
-        Pop-Location
-    }
+    return $true
 }
 
 try {
-    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-        throw "Git not found in PATH"
-    }
-    if (-not (Get-Command py -ErrorAction SilentlyContinue)) {
-        throw "Python launcher not found"
-    }
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw "Git not found in PATH" }
 
-    # The permanent BAT downloads this runner on every launch. This also refreshes
-    # the cached runner during a live session so the BAT itself never needs editing.
-    RefreshAutopilot
+    Ensure-Repo
+    $py = Ensure-Venv
 
-    EnsureRepo
-    EnsureVenv
-    CompileCheck
-    InstallDeps
-    DBCheck
-    WriteServerTaskBat
+    Run-Git @("fetch","origin",$Branch,"--prune") | Out-Null
 
-    if (-not (Healthy)) {
-        try { StopServer } catch {}
-        StartServer
+    $local = Head "HEAD"
+    $remote = Head "origin/$Branch"
+    $good = Best-Rollback $local
+
+    if (-not (Test-Path $GoodFile) -and (Is-Healthy)) {
+        Record-Good $local
+        $good = Best-Rollback $local
+        Log "Initial known-good revision recorded: $local"
     }
 
-    if (Healthy) {
-        $head = Head "HEAD"
-        if (-not (Test-Path $GoodFile)) {
-            SaveKnownGood $head
+    if ($local -eq $remote) {
+        if (-not (Is-Healthy)) {
+            Log "Current revision is unhealthy. Restarting."
+            Stop-Server
+            Compile-Check $py
+            Create-Server-Task
+            Start-Server
+
+            if (-not (Is-Healthy)) {
+                $rollback = Best-Rollback $local
+                if ($rollback) {
+                    Log "Current revision still unhealthy. Rolling back to previous stable $rollback."
+                    Stop-Server
+                    Run-Git @("reset","--hard",$rollback) | Out-Null
+                    Compile-Check $py
+                    Install-Dependencies $py
+                    DB-Check $py
+                    Create-Server-Task
+                    Start-Server
+                    if (-not (Is-Healthy)) { throw "Previous stable revision is also unhealthy" }
+                    Record-Good $rollback
+                    Log "ROLLBACK SUCCESS: $rollback"
+                } else {
+                    throw "Server unhealthy and no previous stable revision is recorded"
+                }
+            }
         }
-        Log "SERVER ONLINE: http://127.0.0.1:$Port ; revision=$head"
     } else {
-        Log "Initial server health check failed; supervisor will retry."
+        Log "NEW REVISION: $local -> $remote"
+
+        Stop-Server
+        $backup = Backup-Database
+
+        try {
+            Run-Git @("reset","--hard",$remote) | Out-Null
+            Run-Git @("clean","-fd") | Out-Null
+            $py = Ensure-Venv
+            Compile-Check $py
+            Install-Dependencies $py
+            DB-Check $py
+            Create-Server-Task
+            Start-Server
+
+            if (-not (Is-Healthy)) { throw "New revision failed health check" }
+
+            Record-Good $remote
+            Log "UPDATE SUCCESS: $remote is now known-good."
+        } catch {
+            Log "UPDATE FAILED: $($_.Exception.Message)"
+
+            $rollback = if ($local -and $local -match "^[0-9a-f]{40}$") { $local } else { $good }
+            if (-not $rollback) { $rollback = Best-Rollback $local }
+
+            if (-not $rollback) {
+                throw "No stable revision available for rollback"
+            }
+
+            Stop-Server
+            Run-Git @("reset","--hard",$rollback) | Out-Null
+            $py = Ensure-Venv
+            Compile-Check $py
+            Install-Dependencies $py
+            if ($backup) { Restore-Database $backup }
+            DB-Check $py
+            Create-Server-Task
+            Start-Server
+
+            if (-not (Is-Healthy)) {
+                throw "Rollback health check failed"
+            }
+
+            Record-Good $rollback
+            Log "ROLLBACK SUCCESS: $rollback"
+        }
     }
 
-    while ($true) {
-        try {
-            RefreshAutopilot
-            UpdateCycle
-        } catch {
-            Log "SUPERVISOR CYCLE FAILED: $($_.Exception.Message)"
-        }
+    Ensure-Task | Out-Null
+    if (-not (Is-Healthy)) {
+        Create-Server-Task
+        Start-Server
+        if (-not (Is-Healthy)) { throw "Server is not healthy after recovery" }
+    }
 
-        Start-Sleep -Seconds $CheckSeconds
+    if ($Once) {
+        exit 0
     }
 } catch {
     Log "FATAL: $($_.Exception.Message)"
