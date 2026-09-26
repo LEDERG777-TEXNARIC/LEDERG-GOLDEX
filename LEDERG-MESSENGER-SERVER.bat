@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-title LEDERG MESSENGER - AUTOPILOT SERVER :8000
+title LEDERG MESSENGER - LIVE AUTOPILOT :8000
 
 set "REPO_URL=https://github.com/LEDERG777-TEXNARIC/LEDERG-GOLDEX.git"
 set "BRANCH=main"
@@ -10,83 +10,93 @@ set "HOST=0.0.0.0"
 set "PORT=8000"
 set "CHECK_SECONDS=30"
 set "RESTART_SECONDS=3"
+set "SERVER_PID="
 
 echo ============================================================
-echo LEDERG MESSENGER AUTOPILOT SERVER
+echo LEDERG MESSENGER - LIVE AUTOPILOT
 echo APP : %APP_DIR%
 echo PORT: %PORT%
 echo GIT : %REPO_URL%
 echo ============================================================
 echo.
-echo BAT keeps run.py alive and auto-updates from GitHub.
-echo run.py stdout/stderr are shown in this window.
+echo run.py runs in background with LIVE console logs.
+echo GitHub is checked every %CHECK_SECONDS% seconds.
+echo New commit = stop -> update -> pip -> restart.
 echo.
 
 if not exist "%APP_DIR%\run.py" (
     echo [ERROR] run.py not found: %APP_DIR%\run.py
     exit /b 1
 )
-
 if not exist "%PYTHON%" (
     echo [ERROR] Python venv not found: %PYTHON%
     exit /b 1
 )
-
 if not exist "%APP_DIR%\.git" (
     echo [ERROR] Git repository not found: %APP_DIR%\.git
     exit /b 1
 )
 
 cd /d "%APP_DIR%"
-git remote set-url origin "%REPO_URL%" >nul 2>&1
-if errorlevel 1 (
-    echo [ERROR] Could not set GitHub remote.
-    exit /b 1
-)
+powershell -NoProfile -Command "git -C '%APP_DIR%' remote set-url origin '%REPO_URL%'" >nul 2>&1
 
-:MAIN_LOOP
+:MAIN
 echo.
 echo ============================================================
-echo [%DATE% %TIME%] CHECK / UPDATE
+echo [%DATE% %TIME%] SERVER CYCLE
 echo ============================================================
 
-call :UPDATE_REPOSITORY
-if errorlevel 1 (
-    echo [GIT] Update check failed. Server will continue.
+call :CHECK_REMOTE
+if errorlevel 2 (
+    echo [GIT] New commit found. Updating before server start...
+    call :APPLY_UPDATE
+    if errorlevel 1 echo [GIT] Update failed. Starting current local revision.
 )
 
 call :FREE_PORT
 if errorlevel 1 (
     echo [PORT] Could not free port %PORT%.
-    echo [WAIT] Retrying in %RESTART_SECONDS% seconds...
     timeout /t %RESTART_SECONDS% /nobreak >nul
-    goto MAIN_LOOP
+    goto MAIN
 )
 
-echo.
-echo [START] LEDERG run.py -> %HOST%:%PORT%
-echo [LOGS] Live run.py logs:
-echo.
+call :START_SERVER
+if errorlevel 1 (
+    echo [SERVER] run.py failed to open port %PORT%.
+    timeout /t %RESTART_SECONDS% /nobreak >nul
+    goto MAIN
+)
 
-set "LEDERG_HOST=%HOST%"
-set "LEDERG_PORT=%PORT%"
+:MONITOR
+timeout /t %CHECK_SECONDS% /nobreak >nul
 
-"%PYTHON%" -u "%APP_DIR%\run.py"
+call :SERVER_ALIVE
+if errorlevel 1 (
+    echo.
+    echo [WATCHDOG] run.py stopped listening on %PORT%.
+    call :STOP_SERVER
+    goto MAIN
+)
 
-set "EXIT_CODE=%ERRORLEVEL%"
-echo.
-echo ============================================================
-echo [%DATE% %TIME%] run.py EXITED WITH CODE %EXIT_CODE%
-echo ============================================================
-echo [RESTART] Server will restart in %RESTART_SECONDS% seconds.
-timeout /t %RESTART_SECONDS% /nobreak >nul
-goto MAIN_LOOP
+call :CHECK_REMOTE
+if errorlevel 2 (
+    echo.
+    echo ============================================================
+    echo [%DATE% %TIME%] NEW GITHUB COMMIT
+    echo ============================================================
+    call :STOP_SERVER
+    call :APPLY_UPDATE
+    if errorlevel 1 echo [GIT] Update failed. Keeping local revision.
+    goto MAIN
+)
+
+goto MONITOR
 
 
-:UPDATE_REPOSITORY
+:CHECK_REMOTE
 cd /d "%APP_DIR%"
+echo [GIT] Checking GitHub...
 
-echo [GIT] Fetching GitHub...
 git fetch origin "%BRANCH%" --prune
 if errorlevel 1 (
     echo [GIT] Fetch failed.
@@ -96,15 +106,19 @@ if errorlevel 1 (
 for /f "delims=" %%A in ('git rev-parse HEAD') do set "LOCAL_COMMIT=%%A"
 for /f "delims=" %%A in ('git rev-parse origin/%BRANCH%') do set "REMOTE_COMMIT=%%A"
 
-if /I "%LOCAL_COMMIT%"=="%REMOTE_COMMIT%" (
-    echo [GIT] Up to date: %LOCAL_COMMIT:~0,8%
+if /I "!LOCAL_COMMIT!"=="!REMOTE_COMMIT!" (
+    echo [GIT] Up to date: !LOCAL_COMMIT:~0,8!
     exit /b 0
 )
 
-echo [GIT] NEW COMMIT DETECTED
-echo [GIT] Local : %LOCAL_COMMIT%
-echo [GIT] Remote: %REMOTE_COMMIT%
-echo [GIT] Updating local files...
+echo [GIT] Update available.
+echo [GIT] Local : !LOCAL_COMMIT!
+echo [GIT] Remote: !REMOTE_COMMIT!
+exit /b 2
+
+
+:APPLY_UPDATE
+cd /d "%APP_DIR%"
 
 git reset --hard "origin/%BRANCH%"
 if errorlevel 1 (
@@ -115,15 +129,70 @@ if errorlevel 1 (
 git clean -fd
 
 if exist "requirements.txt" (
-    echo [PIP] Checking dependencies...
+    echo [PIP] Installing dependencies...
     "%PYTHON%" -m pip install -r "requirements.txt" --disable-pip-version-check
     if errorlevel 1 (
-        echo [PIP] Dependency update failed.
+        echo [PIP] Dependency installation failed.
         exit /b 1
     )
 )
 
-echo [GIT] Update installed successfully.
+for /f "delims=" %%A in ('git rev-parse HEAD') do set "NEW_COMMIT=%%A"
+echo [GIT] Running revision: !NEW_COMMIT!
+exit /b 0
+
+
+:START_SERVER
+echo.
+echo [START] run.py -> %HOST%:%PORT%
+echo [LOGS] LIVE run.py stdout/stderr:
+echo.
+
+set "LEDERG_HOST=%HOST%"
+set "LEDERG_PORT=%PORT%"
+set "SERVER_PID="
+
+start "" /B "%PYTHON%" -u "%APP_DIR%\run.py"
+
+for /l %%N in (1,1,10) do (
+    timeout /t 1 /nobreak >nul
+    call :GET_PORT_PID
+    if defined SERVER_PID (
+        echo [SERVER] run.py PID: !SERVER_PID!
+        exit /b 0
+    )
+)
+
+exit /b 1
+
+
+:SERVER_ALIVE
+call :GET_PORT_PID
+if defined SERVER_PID exit /b 0
+exit /b 1
+
+
+:GET_PORT_PID
+set "SERVER_PID="
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":%PORT% " ^| findstr /I "LISTENING"') do (
+    set "SERVER_PID=%%P"
+    goto GET_PORT_PID_DONE
+)
+:GET_PORT_PID_DONE
+exit /b 0
+
+
+:STOP_SERVER
+call :GET_PORT_PID
+if not defined SERVER_PID (
+    echo [SERVER] No process on port %PORT%.
+    exit /b 0
+)
+
+echo [SERVER] Stopping PID !SERVER_PID!...
+powershell -NoProfile -Command "Stop-Process -Id !SERVER_PID! -Force -ErrorAction SilentlyContinue" >nul 2>&1
+set "SERVER_PID="
+timeout /t 1 /nobreak >nul
 exit /b 0
 
 
@@ -133,13 +202,9 @@ set "FOUND_PORT=0"
 for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":%PORT% " ^| findstr /I "LISTENING"') do (
     set "FOUND_PORT=1"
     echo [PORT] Port %PORT% occupied by PID %%P
-    tasklist /FI "PID eq %%P" /FO TABLE /NH
+    powershell -NoProfile -Command "Get-Process -Id %%P -ErrorAction SilentlyContinue | Select-Object Id,ProcessName,Path"
     echo [PORT] Terminating PID %%P...
-    taskkill /F /PID %%P /T >nul 2>&1
-    if errorlevel 1 (
-        echo [PORT] Failed to terminate PID %%P
-        exit /b 1
-    )
+    powershell -NoProfile -Command "Stop-Process -Id %%P -Force -ErrorAction SilentlyContinue" >nul 2>&1
     echo [PORT] PID %%P terminated.
 )
 
