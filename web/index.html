@@ -257,6 +257,7 @@ const state={
  notificationPreview:localStorage.getItem('lederg_notify_preview')!=='0',
  theme:localStorage.getItem('lederg_theme')||'black',
  activeSettings:'profile',
+ callState:{pc:null,stream:null,callId:null,chatId:null,mode:null,remoteUserId:null,pendingOffer:null,pendingCallId:null,pendingMode:null},
  requires2fa:false,
  textSize:localStorage.getItem('lederg_text_size')||'16',
  animations:localStorage.getItem('lederg_animations')!=='0',
@@ -391,6 +392,57 @@ function updatePresence(uid,online){
    $('chatSub').innerHTML=online?'<span style="color:var(--green)">в сети</span>':'Личный чат';
  }
 }
+
+const ICE_SERVERS=[{urls:'stun:stun.cloudflare.com:3478'}];
+function showCall(){ $('callModal').style.display='grid' }
+function callStatus(t){$('callStatus').textContent=t}
+function cleanupCall(sendEnd=true){
+ const cs=state.callState;
+ if(sendEnd&&cs.chatId)sendWS({type:'call_end',chat_id:cs.chatId,call_id:cs.callId});
+ try{cs.pc?.close()}catch{}
+ if(cs.stream)cs.stream.getTracks().forEach(t=>t.stop());
+ cs.pc=null;cs.stream=null;cs.callId=null;cs.chatId=null;cs.mode=null;cs.remoteUserId=null;cs.pendingOffer=null;cs.pendingCallId=null;cs.pendingMode=null;
+ $('localVideo').srcObject=null;$('remoteVideo').srcObject=null;$('remoteAudio').srcObject=null;
+ $('incomingCallBox').style.display='none';$('acceptCall').style.display='none';$('rejectCall').style.display='none';$('callClose').disabled=false;
+ $('callModal').style.display='none';
+}
+async function makePeer(mode,chatId,callId){
+ const pc=new RTCPeerConnection({iceServers:ICE_SERVERS});
+ const stream=await navigator.mediaDevices.getUserMedia({audio:true,video:mode==='video'});
+ state.callState.pc=pc;state.callState.stream=stream;state.callState.chatId=chatId;state.callState.callId=callId;state.callState.mode=mode;
+ $('localVideo').srcObject=stream;$('localVideo').style.display=mode==='video'?'block':'none';
+ pc.ontrack=e=>{if(e.streams[0]){$('remoteVideo').srcObject=e.streams[0];$('remoteAudio').srcObject=e.streams[0]}};
+ pc.onicecandidate=e=>{if(e.candidate)sendWS({type:'call_ice',chat_id:chatId,call_id:callId,candidate:e.candidate})};
+ pc.onconnectionstatechange=()=>{if(pc.connectionState==='connected')callStatus('Соединение установлено');if(['failed','disconnected'].includes(pc.connectionState))callStatus('Связь прервана')};
+ stream.getTracks().forEach(t=>pc.addTrack(t,stream));
+ return pc;
+}
+async function startCall(mode){
+ const chat=state.activeChat;if(!chat?.peer?.id)return;
+ try{
+  const p=await api('/api/chats/'+chat.id+'/call-permission');if(!p.allowed){alert(p.reason||'Звонки недоступны');return}
+  const callId=crypto.randomUUID();showCall();$('callTitle').textContent=mode==='video'?'Видеозвонок':'Аудиозвонок';callStatus('Вызов…');
+  const pc=await makePeer(mode,chat.id,callId);
+  const offer=await pc.createOffer();await pc.setLocalDescription(offer);
+  sendWS({type:'call_invite',chat_id:chat.id,call_id:callId,mode});
+  sendWS({type:'call_offer',chat_id:chat.id,call_id:callId,mode,description:pc.localDescription});
+ }catch(e){cleanupCall(false);alert('Не удалось начать звонок: '+e.message)}
+}
+async function acceptIncomingCall(){
+ const cs=state.callState;if(!cs.pendingOffer)return;
+ try{
+  const pc=await makePeer(cs.pendingMode,cs.chatId,cs.pendingCallId);
+  $('incomingCallBox').style.display='none';$('acceptCall').style.display='none';$('rejectCall').style.display='none';
+  await pc.setRemoteDescription(new RTCSessionDescription(cs.pendingOffer));
+  const answer=await pc.createAnswer();await pc.setLocalDescription(answer);
+  sendWS({type:'call_answer',chat_id:cs.chatId,call_id:cs.pendingCallId,mode:cs.pendingMode,description:pc.localDescription});
+  cs.pendingOffer=null;callStatus('Подключение…');
+ }catch(e){callStatus('Ошибка: '+e.message);cleanupCall()}
+}
+async function handleCallIce(d){
+ if(!state.callState.pc||d.call_id!==state.callState.callId)return;
+ try{await state.callState.pc.addIceCandidate(d.candidate)}catch{}
+}
 function connectWS(){
  if(!state.token)return;
  try{
@@ -406,7 +458,22 @@ function connectWS(){
       if(!isActive&&d.message.sender_id!==state.user.id&&state.notificationEnabled&&state.notificationPrivate&&document.hidden){playNotificationSound();if('Notification' in window&&Notification.permission==='granted'){
         new Notification(d.message.sender?.display_name||'LEDERG',{body:state.notificationPreview?(d.message.text||'Новое сообщение'):'Новое сообщение'});
       }
-    }else if(d.type==='chat_created'){
+    }else if(d.type==='call_invite'){
+ if(d.from_user_id===state.user.id)return;
+ state.callState.chatId=d.chat_id;state.callState.callId=d.call_id;state.callState.mode=d.mode;state.callState.remoteUserId=d.from_user_id;
+ showCall();$('callTitle').textContent=d.mode==='video'?'Входящий видеозвонок':'Входящий аудиозвонок';$('incomingCallBox').style.display='block';$('incomingCallBox').textContent='Вам звонят. Принять?';$('acceptCall').style.display='inline-block';$('rejectCall').style.display='inline-block';callStatus('Входящий звонок…');
+}else if(d.type==='call_offer'){
+ if(d.from_user_id===state.user.id)return;
+ state.callState.pendingOffer=d.description;state.callState.pendingCallId=d.call_id;state.callState.pendingMode=d.mode;state.callState.chatId=d.chat_id;state.callState.remoteUserId=d.from_user_id;
+}else if(d.type==='call_answer'){
+ if(d.call_id===state.callState.callId&&state.callState.pc){try{await state.callState.pc.setRemoteDescription(new RTCSessionDescription(d.description))}catch{}}
+}else if(d.type==='call_ice'){
+ if(d.from_user_id!==state.user.id)handleCallIce(d);
+}else if(d.type==='call_reject'){
+ if(d.call_id===state.callState.callId){callStatus('Звонок отклонён');setTimeout(()=>cleanupCall(false),500)}
+}else if(d.type==='call_end'){
+ if(d.call_id===state.callState.callId){callStatus('Собеседник завершил звонок');setTimeout(()=>cleanupCall(false),500)}
+}else if(d.type==='chat_created'){
       loadChats();
     }else if(d.type==='presence'){
       if(d.user_id!==state.user.id)updatePresence(d.user_id,!!d.online);
@@ -581,6 +648,14 @@ $('composer').onsubmit=async e=>{
 $('messages').onscroll=()=>{if(state.activeChat&&$('messages').scrollTop<30)sendWS({type:'read',chat_id:state.activeChat.id,message_id:$('messages').lastElementChild?.dataset?.id})};
 $('backBtn').onclick=()=>{$('chatPane').classList.remove('open');$('sidebar').classList.remove('hidden')};
 $('chatSettingsBtn').onclick=()=>{$('chatSettingsModal').style.display='grid';loadChatWallpaper(state.activeChat.id)};
+$('callAudioBtn').onclick=()=>startCall('audio');
+$('callVideoBtn').onclick=()=>startCall('video');
+$('callClose').onclick=()=>cleanupCall();
+$('hangupCall').onclick=()=>cleanupCall();
+$('rejectCall').onclick=()=>{if(state.callState.chatId)sendWS({type:'call_reject',chat_id:state.callState.chatId,call_id:state.callState.callId});cleanupCall(false)};
+$('acceptCall').onclick=acceptIncomingCall;
+$('muteMic').onclick=()=>{const ts=state.callState.stream?.getAudioTracks()||[];ts.forEach(t=>t.enabled=!t.enabled);$('muteMic').textContent=ts.some(t=>!t.enabled)?'Микрофон выключен':'Микрофон'};
+$('toggleCamera').onclick=()=>{const ts=state.callState.stream?.getVideoTracks()||[];ts.forEach(t=>t.enabled=!t.enabled);$('toggleCamera').textContent=ts.some(t=>!t.enabled)?'Камера выключена':'Камера'};
 $('chatSettingsClose').onclick=()=>{$('chatSettingsModal').style.display='none'};
 $('chatSettingsModal').onclick=e=>{if(e.target===$('chatSettingsModal'))$('chatSettingsModal').style.display='none'};
 $('wallpaperInput').onchange=e=>{const f=e.target.files[0];if(f)setWallpaper(f);e.target.value=''};
