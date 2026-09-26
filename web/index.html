@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LEDERG</title>
+<style>
+body{margin:0;font-family:Arial,sans-serif;background:#0e1117;color:#fff}main{max-width:900px;margin:40px auto;padding:24px}h1{letter-spacing:4px}input,button{padding:12px;border-radius:10px;border:1px solid #303744;background:#171c25;color:#fff;margin:4px}button{cursor:pointer}.card{background:#151a22;border:1px solid #292f3a;border-radius:16px;padding:18px;margin-top:15px}.muted{color:#8e98a8}
+</style>
+</head>
+<body><main>
+<h1>LEDERG</h1><div class="muted">Messenger foundation • self-hosted</div>
+<div class="card"><b>Server online</b><p id="status">Checking…</p></div>
+<div class="card"><h3>API</h3><code>/health</code><br><code>/api/auth/register</code><br><code>/api/auth/login</code><br><code>/ws?token=...</code></div>
+</main>
+<script>
+fetch('/health').then(r=>r.json()).then(x=>status.textContent='OK • '+x.version).catch(()=>status.textContent='Offline');
+</script>
+</body></html>
