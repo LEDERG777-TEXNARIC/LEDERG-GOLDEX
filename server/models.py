@@ -21,6 +21,8 @@ class User(Base):
     avatar_public: Mapped[bool] = mapped_column(Boolean, default=True)
     read_receipts: Mapped[bool] = mapped_column(Boolean, default=True)
     allow_messages: Mapped[bool] = mapped_column(Boolean, default=True)
+    two_factor_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    two_factor_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 class Session(Base):
     __tablename__ = "sessions"
@@ -29,6 +31,14 @@ class Session(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     revoked: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+
+class Block(Base):
+    __tablename__ = "blocks"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    blocker_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    blocked_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    __table_args__ = (UniqueConstraint("blocker_id", "blocked_id"),)
 
 class Chat(Base):
     __tablename__ = "chats"
@@ -50,6 +60,7 @@ class ChatPreference(Base):
     chat_id: Mapped[int] = mapped_column(ForeignKey("chats.id", ondelete="CASCADE"), index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     wallpaper_path: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    muted: Mapped[bool] = mapped_column(Boolean, default=False)
     __table_args__ = (UniqueConstraint("chat_id", "user_id"),)
 
 class Message(Base):
