@@ -91,6 +91,7 @@ async def update_me(
     avatar_public: bool | None = Form(default=None),
     read_receipts: bool | None = Form(default=None),
     allow_messages: bool | None = Form(default=None),
+    remove_avatar: bool = Form(default=False),
     avatar: UploadFile | None = File(default=None),
     me=Depends(current_user),
 ):
@@ -105,6 +106,9 @@ async def update_me(
 
     new_avatar_rel = None
     old_avatar_rel = None
+    if remove_avatar and avatar is not None:
+        raise HTTPException(400, "Choose remove avatar or upload a new avatar")
+
     if avatar is not None:
         ext = _image_ext(avatar)
         if not ext:
@@ -150,6 +154,9 @@ async def update_me(
         if new_avatar_rel:
             old_avatar_rel = obj.avatar_path
             obj.avatar_path = new_avatar_rel
+        elif remove_avatar:
+            old_avatar_rel = obj.avatar_path
+            obj.avatar_path = None
         db.commit()
         db.refresh(obj)
         result = private_user(obj)
