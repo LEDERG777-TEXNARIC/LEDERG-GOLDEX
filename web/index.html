@@ -429,6 +429,7 @@ function renderSettings(section){
  const c=$('settingsContent');
  if(section==='profile'){
    c.innerHTML='<div class="setting-section"><div class="setting-title">Профиль</div><div class="profile-card">'+avatarHtml(state.user,'avatar profile-big')+'<div><div style="font-weight:800">'+escapeHtml(state.user.display_name)+'</div><div class="preview">@'+escapeHtml(state.user.username)+'</div><div class="preview">'+escapeHtml(state.user.bio||'Нет описания')+'</div></div></div><div class="settings-actions"><label class="secondary" style="cursor:pointer">Новая аватарка<input id="avatarFile" type="file" accept="image/jpeg,image/png,image/webp" hidden></label><label class="secondary"><input id="removeAvatar" type="checkbox"> удалить аватар</label></div></div><div class="setting-section"><div class="setting-title">Данные</div><input id="setUsername" class="settings-input" maxlength="32" value="'+escapeHtml(state.user.username)+'" placeholder="Никнейм" style="margin-bottom:9px"><input id="setDisplayName" class="settings-input" maxlength="80" value="'+escapeHtml(state.user.display_name)+'" placeholder="Имя" style="margin-bottom:9px"><textarea id="setBio" class="settings-textarea" maxlength="160" placeholder="О себе">'+escapeHtml(state.user.bio||'')+'</textarea></div><div class="settings-actions"><button id="saveProfile" class="primary" style="width:auto;padding:10px 16px">Сохранить</button><span id="setSaveStatus" class="preview" style="align-self:center"></span></div>';
+   $('saveProfile').onclick=saveProfile;
    return;
  }
  if(section==='privacy'){
@@ -443,8 +444,6 @@ function renderSettings(section){
    $('setAnimations').onclick=()=>{toggleEl($('setAnimations'));state.animations=$('setAnimations').dataset.on==='1';localStorage.setItem('lederg_animations',state.animations?'1':'0');applyClientPrefs()};
    $('setSendEnter').onclick=()=>{toggleEl($('setSendEnter'));state.sendByEnter=$('setSendEnter').dataset.on==='1';localStorage.setItem('lederg_send_enter',state.sendByEnter)};
    return;
- }
- if(section==='notifications')   return;
  }
  if(section==='notifications'){
    c.innerHTML='<div class="setting-section"><div class="setting-title">Уведомления</div>'+settingToggle('setNotify','Браузерные уведомления','Показывать новые сообщения, когда вкладка скрыта.',state.notificationEnabled)+'</div>';
