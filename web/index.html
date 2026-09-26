@@ -255,6 +255,10 @@ function initials(name){return (name||'L').trim().slice(0,1).toUpperCase()}
 function time(v){if(!v)return '';try{return new Date(v).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}catch{return ''}}
 function avatarHtml(u,cls='avatar'){const url=u?.avatar_url;return url?'<div class="'+cls+'"><img src="'+escapeHtml(url)+'?v='+(u?.id||Date.now())+'" alt=""></div>':'<div class="'+cls+'">'+escapeHtml(initials(u?.display_name))+'</div>'}
 function setTheme(t){state.theme=t;localStorage.setItem('lederg_theme',t);document.body.classList.toggle('light',t==='light')}
+function applyClientPrefs(){
+ document.documentElement.style.setProperty('--msg-size',state.textSize+'px');
+ document.body.classList.toggle('no-animations',!state.animations);
+}
 function api(path,options={}){
  const headers={...(options.headers||{})};
  if(!(options.body instanceof FormData))headers['Content-Type']='application/json';
