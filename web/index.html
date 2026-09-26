@@ -404,9 +404,12 @@ async function bootstrapSession(){
    if(r.ok&&data.access_token){
     state.token=data.access_token;
     state.sessionRemembered=data.remembered!==false;
-    localStorage.removeItem('lederg_token');
+    // Keep the current device credential persistently as a local fallback.
+    // The HttpOnly cookie remains the primary credential, while this copy
+    // guarantees device resume even when a reverse proxy/browser drops cookies.
+    localStorage.setItem('lederg_token',state.token);
     localStorage.setItem('lederg_session_remembered',state.sessionRemembered?'1':'0');
-    state.legacyToken=null;
+    state.legacyToken=state.token;
     return true;
    }
    if(r.status===401)return false;
@@ -424,8 +427,10 @@ async function refreshSession(){
   if(!r.ok||!data.access_token)return false;
   state.token=data.access_token;
   state.sessionRemembered=data.remembered!==false;
+  // Rotate the persistent device credential whenever the server refreshes it.
   localStorage.setItem('lederg_token',state.token);
   localStorage.setItem('lederg_session_remembered',state.sessionRemembered?'1':'0');
+  state.legacyToken=state.token;
   state.authDegraded=false;
   scheduleTokenRefresh();
   return true;
