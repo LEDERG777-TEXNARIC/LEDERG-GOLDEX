@@ -231,17 +231,18 @@ async def set_wallpaper(chat_id: int, wallpaper: UploadFile = File(...), me=Depe
     if not magic_ok:
         raise HTTPException(415, "Invalid image file")
 
-    folder = Path(settings.data_dir) / "uploads" / "wallpapers"
-    folder.mkdir(parents=True, exist_ok=True)
-    filename = f"chat_{chat_id}_{me['id']}_{secrets.token_hex(12)}.{ext}"
-    path = folder / filename
-    path.write_bytes(data)
-    rel = f"uploads/wallpapers/{filename}"
-
     old_rel = None
     with SessionLocal() as db:
         if not is_member(db, chat_id, me["id"]):
             raise HTTPException(403, "Not a chat member")
+
+        folder = Path(settings.data_dir) / "uploads" / "wallpapers"
+        folder.mkdir(parents=True, exist_ok=True)
+        filename = f"chat_{chat_id}_{me['id']}_{secrets.token_hex(12)}.{ext}"
+        path = folder / filename
+        path.write_bytes(data)
+        rel = f"uploads/wallpapers/{filename}"
+
         pref = db.scalar(select(ChatPreference).where(
             ChatPreference.chat_id == chat_id, ChatPreference.user_id == me["id"]
         ))
