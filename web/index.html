@@ -389,7 +389,9 @@ async function refreshSession(){
   const data=await r.json().catch(()=>({}));
   if(!r.ok||!data.access_token)return false;
   state.token=data.access_token;
+  state.sessionRemembered=data.remembered!==false;
   localStorage.setItem('lederg_token',state.token);
+  localStorage.setItem('lederg_session_remembered',state.sessionRemembered?'1':'0');
   scheduleTokenRefresh();
   return true;
  }catch{return false}
