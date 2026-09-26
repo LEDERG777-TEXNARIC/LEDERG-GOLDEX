@@ -294,6 +294,12 @@ def call_permission(chat_id: int, me=Depends(current_user)):
         peer = db.get(User, other_id)
         if not peer or not peer.allow_calls:
             return {"allowed": False, "reason": "The user does not accept calls"}
+        blocked = db.scalar(select(Block.id).where(or_(
+            and_(Block.blocker_id == me["id"], Block.blocked_id == other_id),
+            and_(Block.blocker_id == other_id, Block.blocked_id == me["id"]),
+        )))
+        if blocked:
+            return {"allowed": False, "reason": "Messaging and calls are blocked"}
         return {"allowed": True, "user_id": other_id}
 
 @router.post("/chats/{chat_id}/mute")
