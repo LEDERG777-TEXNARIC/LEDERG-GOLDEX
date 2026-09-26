@@ -1,60 +1,61 @@
 @echo off
-chcp 65001 >nul
-title LEDERG SERVER - LIVE LOGS
-setlocal EnableExtensions
+setlocal EnableExtensions EnableDelayedExpansion
+title LEDERG MESSENGER SERVER
+cd /d "C:\LEDERG-MESSENGER"
 
-set "APP_DIR=C:\LEDERG-MESSENGER"
-set "LEDERG_HOST=0.0.0.0"
-set "LEDERG_PORT=8000"
-set "RUNPY=%APP_DIR%\run.py"
-set "PYTHON=%APP_DIR%\.venv\Scripts\python.exe"
+set "PORT=8000"
+set "HOST=0.0.0.0"
+set "PYTHON=C:\LEDERG-MESSENGER\.venv\Scripts\python.exe"
+set "RUNPY=C:\LEDERG-MESSENGER\run.py"
+set "RESTART_DELAY=3"
 
-cd /d "%APP_DIR%"
-if errorlevel 1 (
-    echo [ERROR] Cannot open %APP_DIR%
+echo ============================================================
+echo                  LEDERG MESSENGER
+echo ============================================================
+echo APP   : C:\LEDERG-MESSENGER
+echo HOST  : %HOST%
+echo PORT  : %PORT%
+echo.
+echo This window shows live run.py / Uvicorn logs.
+echo ============================================================
+echo.
+
+if not exist "%RUNPY%" (
+    echo [ERROR] run.py not found:
+    echo         %RUNPY%
     pause
     exit /b 1
 )
 
 if not exist "%PYTHON%" (
-    echo [ERROR] Python environment not found:
-    echo %PYTHON%
+    echo [ERROR] Virtualenv Python not found:
+    echo         %PYTHON%
+    echo Create .venv first.
     pause
     exit /b 1
 )
 
-echo ============================================================
-echo LEDERG SERVER
-echo http://127.0.0.1:8000
-echo LIVE run.py logs are shown below
-echo ============================================================
+:MAIN_LOOP
+echo.
+echo [%DATE% %TIME%] [CHECK] Checking TCP port %PORT%...
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$port=%PORT%; $c=Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue; if($c){$c | Select-Object -Unique OwningProcess | ForEach-Object { $p=Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue; if($p){ Write-Host ('[PORT] PID=' + $p.Id + ' PROCESS=' + $p.ProcessName); Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 700 } }}"
+
+echo [%DATE% %TIME%] [START] Starting run.py on %HOST%:%PORT%
+echo ------------------------------------------------------------
 echo.
 
-:START_SERVER
-echo [%date% %time%] Checking old LEDERG processes...
-
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=Get-CimInstance Win32_Process -Filter 'Name = ''python.exe''' -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and $_.CommandLine -like '*C:\LEDERG-MESSENGER*' -and $_.CommandLine -like '*run.py*' -and $_.ProcessId -ne $PID }; foreach($x in $p){ try { Stop-Process -Id $x.ProcessId -Force -ErrorAction Stop; Write-Host ('[CLEANUP] Stopped old LEDERG run.py PID=' + $x.ProcessId) } catch {} }"
-
-timeout /t 1 /nobreak >nul
-
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$c=Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue; if($c){ foreach($x in $c){ Write-Host ('[PORT] 8000 is still occupied by PID=' + $x.OwningProcess) } exit 1 } exit 0"
-if errorlevel 1 (
-    echo [ERROR] Port 8000 is occupied by another application.
-    echo Close that application or change its port before starting LEDERG.
-    timeout /t 5 /nobreak >nul
-    goto START_SERVER
-)
-
-echo [%date% %time%] Starting run.py...
-echo.
+set "LEDERG_HOST=%HOST%"
+set "LEDERG_PORT=%PORT%"
 
 "%PYTHON%" "%RUNPY%"
 
 set "EXIT_CODE=%ERRORLEVEL%"
 echo.
-echo ============================================================
-echo [%date% %time%] run.py stopped. Exit code: %EXIT_CODE%
-echo Server will restart in 3 seconds...
-echo ============================================================
-timeout /t 3 /nobreak >nul
-goto START_SERVER
+echo ------------------------------------------------------------
+echo [%DATE% %TIME%] [STOP] run.py exited with code %EXIT_CODE%.
+echo [%DATE% %TIME%] [RESTART] Restarting in %RESTART_DELAY% seconds...
+echo ------------------------------------------------------------
+timeout /t %RESTART_DELAY% /nobreak >nul
+goto MAIN_LOOP
