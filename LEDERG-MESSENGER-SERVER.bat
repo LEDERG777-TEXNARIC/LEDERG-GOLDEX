@@ -121,18 +121,22 @@ echo ============================================================
 echo.
 
 :LOOP
-set "TASK_STATUS="
-for /f "tokens=2,*" %%A in ('schtasks /Query /TN "%TASK%" /FO LIST 2^>nul ^| findstr /I /B "Status:"') do set "TASK_STATUS=%%A"
-if not defined TASK_STATUS (
-  echo [WARN] Autopilot task disappeared. Reinstalling...
+schtasks /Query /TN "%TASK%" >nul 2>&1
+if errorlevel 1 (
+  echo [WARN] Autopilot task is really missing. Reinstalling...
   goto INSTALL
 )
-if /I not "%TASK_STATUS%"=="Running" (
-  echo [WARN] Autopilot task is %TASK_STATUS%. Restarting...
-  schtasks /Run /TN "%TASK%" >nul 2>&1
-)
 
-echo [LEDERG] Autopilot task: %TASK_STATUS%
+set "TASK_STATUS=Unknown"
+for /f "delims=" %%A in ('powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$t=Get-ScheduledTask -TaskName '%TASK%' -ErrorAction SilentlyContinue; if($t){$t.State}" 2^>nul') do set "TASK_STATUS=%%A"
+
+if /I "%TASK_STATUS%"=="Running" (
+  echo [LEDERG] Autopilot task: Running
+) else (
+  echo [WARN] Autopilot task state: %TASK_STATUS%. Starting...
+  schtasks /Run /TN "%TASK%" >nul 2>&1
+  if errorlevel 1 echo [WARN] Could not start task right now; supervisor will retry automatically.
+)
 if exist "%LOG%" (
   echo ---------------- LAST LOG ----------------
   powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Get-Content -LiteralPath '%LOG%' -Tail 10"
