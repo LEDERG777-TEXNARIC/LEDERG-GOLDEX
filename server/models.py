@@ -33,6 +33,7 @@ class Session(Base):
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     device_name: Mapped[str] = mapped_column(String(120), default="LEDERG device")
     remembered: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    resume_token_hash: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True, index=True)
     revoked: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
 class Block(Base):
