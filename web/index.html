@@ -50,6 +50,18 @@ body.black .tabs button.active{color:#000}
 .auth-strength-text{font-size:11px;color:var(--muted);min-height:15px}
 .auth-footer{font-size:11px;color:var(--muted);line-height:1.5;margin-top:12px;text-align:center}
 .auth-card .secondary{border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:12px;padding:10px 12px;font-weight:700}
+.notify-prompt{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:250;width:min(560px,calc(100vw - 24px));max-width:560px;background:var(--panel);border:1px solid var(--line);border-radius:17px;padding:14px;box-shadow:var(--shadow);overflow:hidden}
+.notify-prompt-row{display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:12px;align-items:center}
+.notify-icon{width:34px;height:34px;border-radius:10px;background:var(--panel2);display:grid;place-items:center;font-size:19px}
+.notify-copy{min-width:0}
+.notify-title{font-weight:800;line-height:1.25}
+.notify-copy .preview{white-space:normal;overflow-wrap:anywhere;line-height:1.4;margin-top:3px}
+.notify-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+.notify-actions button{width:auto;min-width:92px;margin:0;padding:10px 13px}
+@media(max-width:560px){
+ .notify-prompt-row{grid-template-columns:34px minmax(0,1fr)}
+ .notify-actions{grid-column:2;justify-content:flex-start}
+}
 .app{height:100%;display:grid;grid-template-columns:350px 1fr;overflow:hidden}
 .sidebar{border-right:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-width:0}
 .side-top{padding:18px 16px 10px;border-bottom:1px solid var(--line)}
@@ -964,25 +976,47 @@ document.querySelectorAll('.quick-wall').forEach(b=>b.onclick=async()=>{if(b.dat
 window.addEventListener('resize',()=>{if(innerWidth>760){$('sidebar').classList.remove('hidden');$('chatPane').classList.remove('open')}});
 window.addEventListener('beforeunload',()=>{try{state.ws?.close()}catch{}});
 async function boot(){
+ if(!state.token){showAuth();return}
  try{
+  // Refresh first. This makes a hard browser refresh recover a remembered session.
+  await refreshSession();
   await loadMe();
-  await loadCallConfig();
-  setTheme(state.theme);
-  applyClientPrefs();
-  scheduleTokenRefresh();
-  showApp();
-  await loadChats();
-  connectWS();
-  updateNotifyPrompt();
  }catch(e){
-  showAuth();
-  if($('authError'))$('authError').textContent=e.message||'Не удалось восстановить сессию.';
+  if(e.code==='AUTH'||/Сессия|session|token/i.test(e.message||'')){
+   showAuth();
+   if($('authError'))$('authError').textContent='Сессия завершена. Войди ещё раз.';
+   return;
+  }
+  // A temporary network/backend hiccup must not visually log the user out.
+  showApp();
+  if($('authError'))$('authError').textContent=e.message||'Соединение с сервером временно недоступно.';
+  return;
  }
+ try{if(typeof loadCallConfig==='function')await loadCallConfig()}catch{}
+ setTheme(state.theme);
+ applyClientPrefs();
+ scheduleTokenRefresh();
+ showApp();
+ try{await loadChats()}catch{}
+ connectWS();
+ updateNotifyPrompt();
 }
 setAuthMode('login');setTheme(state.theme);applyClientPrefs();
 if(state.token)boot();else showAuth();
 </script>
-<div id="notifyPrompt" style="display:none;position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:250;width:min(520px,calc(100% - 24px));background:var(--panel);border:1px solid var(--line);border-radius:17px;padding:13px 14px;box-shadow:var(--shadow)"><div style="display:flex;align-items:center;gap:12px"><div style="font-size:20px">🔔</div><div style="flex:1"><div style="font-weight:800">Разрешить уведомления LEDERG?</div><div class="preview">Уведомления и звук включены по умолчанию. Разрешение можно изменить в браузере.</div></div><button id="notifyAllowBtn" class="primary" style="width:auto;padding:10px 14px">Разрешить</button><button id="notifyLaterBtn" class="secondary">Позже</button></div></div>
+<div id="notifyPrompt" class="notify-prompt" style="display:none">
+ <div class="notify-prompt-row">
+  <div class="notify-icon">🔔</div>
+  <div class="notify-copy">
+   <div class="notify-title">Разрешить уведомления LEDERG?</div>
+   <div class="preview">Уведомления и звук включены по умолчанию. Разрешение можно изменить в браузере.</div>
+  </div>
+  <div class="notify-actions">
+   <button id="notifyAllowBtn" class="primary">Разрешить</button>
+   <button id="notifyLaterBtn" class="secondary">Позже</button>
+  </div>
+ </div>
+</div>
 
 </body>
 </html>
