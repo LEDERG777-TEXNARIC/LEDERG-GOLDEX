@@ -150,13 +150,12 @@ def messages(
         if before:
             q = q.where(Message.id < before)
         rows = list(reversed(db.scalars(q).all()))
+        if not rows:
+            return []
+        sender_ids = {m.sender_id for m in rows}
         senders = {
             u.id: u
-            for u in db.scalars(
-                select(User).where(
-                    User.id.in_({m.sender_id for m in rows}) if rows else False
-                )
-            ).all()
+            for u in db.scalars(select(User).where(User.id.in_(sender_ids))).all()
         }
         return [message_payload(m, senders.get(m.sender_id)) for m in rows]
 
