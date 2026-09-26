@@ -89,14 +89,6 @@ def me(user=Depends(current_user)):
             raise HTTPException(404, "User not found")
         return private_user(obj)
 
-@router.get("/{user_id}")
-def get_user(user_id: int, me=Depends(current_user)):
-    with SessionLocal() as db:
-        obj = db.get(User, user_id)
-        if not obj or not obj.is_active or blocked_either_way(db, me["id"], user_id):
-            raise HTTPException(404, "User not found")
-        return public_user(obj, me["id"])
-
 @router.put("/me")
 async def update_me(
     username: str | None = Form(default=None),
@@ -298,3 +290,11 @@ def revoke_all_sessions(me=Depends(current_user)):
         db.execute(update(Session).where(Session.user_id==me["id"]).values(revoked=True))
         db.commit()
     return {"ok":True}
+
+@router.get("/{user_id}")
+def get_user(user_id: int, me=Depends(current_user)):
+    with SessionLocal() as db:
+        obj = db.get(User, user_id)
+        if not obj or not obj.is_active or blocked_either_way(db, me["id"], user_id):
+            raise HTTPException(404, "User not found")
+        return public_user(obj, me["id"])
