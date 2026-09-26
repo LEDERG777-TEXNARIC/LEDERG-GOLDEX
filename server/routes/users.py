@@ -337,7 +337,7 @@ async def update_avatar(avatar: UploadFile = File(...), me=Depends(current_user)
     return result
 
 @router.delete("/me/avatar")
-def delete_avatar(me=Depends(current_user)):
+async def delete_avatar(me=Depends(current_user)):
     old = None
     with SessionLocal() as db:
         user = db.get(User, me["id"])
