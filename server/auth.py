@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 import secrets
 import jwt
 from pwdlib import PasswordHash
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy import select
 from server.config import settings
@@ -63,35 +63,73 @@ def validate_session(user_id: int, session_id: str | None) -> bool:
 
         # Do not write SQLite on every API request; update the device heartbeat at most once/minute.
         if not last_seen or (now - last_seen).total_seconds() >= 60:
-            s.last_seen_at = now
-            db.commit()
+            try:
+                s.last_seen_at = now
+                db.commit()
+            except Exception:
+                db.rollback()
         return True
 
-def current_user(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)):
+
+def _auth_candidates(request: Request, credentials: HTTPAuthorizationCredentials | None):
+    candidates = []
+    for source, raw in (
+        ("bearer", credentials.credentials if credentials else None),
+        ("cookie", request.cookies.get("lederg_auth")),
+    ):
+        if raw and not any(existing == raw for _, existing in candidates):
+            candidates.append((source, raw))
+    return candidates
+
+
+def _decode_session_token(raw: str) -> dict:
+    return jwt.decode(
+        raw,
+        settings.secret_key,
+        algorithms=["HS256"],
+        options={"verify_exp": False},
+    )
+
+
+def current_user(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+):
     if not credentials:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authorization required")
-    try:
-        payload = jwt.decode(credentials.credentials, settings.secret_key, algorithms=["HS256"])
-        uid = int(payload["sub"])
-        sid = payload.get("sid")
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid token")
-    if not validate_session(uid, sid):
-        raise HTTPException(status_code=401, detail="Session revoked")
-    with SessionLocal() as db:
-        user = db.get(User, uid)
-        if not user or not user.is_active:
-            raise HTTPException(status_code=401, detail="User unavailable")
-        return {
-            "id": user.id,
-            "username": user.username,
-            "display_name": user.display_name,
-            "bio": user.bio or "",
-            "avatar_path": user.avatar_path,
-            "discoverable": user.discoverable,
-            "presence_visible": user.presence_visible,
-            "avatar_public": user.avatar_public,
-            "read_receipts": user.read_receipts,
-            "allow_messages": user.allow_messages,
-            "session_id": sid,
-        }
+    if not credentials and not request.cookies.get("lederg_auth"):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authorization required")
+    last_error = "Authorization required"
+    for source, raw in _auth_candidates(request, credentials):
+        try:
+            payload = _decode_session_token(raw)
+            uid = int(payload["sub"])
+            sid = payload.get("sid")
+            if not sid:
+                last_error = "Invalid token"
+                continue
+            if not validate_session(uid, sid):
+                last_error = "Session revoked"
+                continue
+            with SessionLocal() as db:
+                user = db.get(User, uid)
+                if not user or not user.is_active:
+                    last_error = "User unavailable"
+                    continue
+                return {
+                    "id": user.id,
+                    "username": user.username,
+                    "display_name": user.display_name,
+                    "bio": user.bio or "",
+                    "avatar_path": user.avatar_path,
+                    "discoverable": user.discoverable,
+                    "presence_visible": user.presence_visible,
+                    "avatar_public": user.avatar_public,
+                    "read_receipts": user.read_receipts,
+                    "allow_messages": user.allow_messages,
+                    "session_id": sid,
+                }
+        except Exception as exc:
+            last_error = f"{source}: invalid session"
+            print(f"[AUTH] current_user rejected {source}: {type(exc).__name__}")
+    raise HTTPException(status_code=401, detail=last_error)

@@ -94,12 +94,25 @@ def _set_auth_cookie(response: Response, token: str, remember_device: bool, requ
     response.set_cookie(
         "lederg_auth",
         token,
-        max_age=(365 * 24 * 60 * 60) if remember_device else None,
+        max_age=365 * 24 * 60 * 60,
+        expires=365 * 24 * 60 * 60,
         httponly=True,
         secure=request.url.scheme == "https",
         samesite="lax",
         path="/",
     )
+
+
+def _short_sid(sid: str | None) -> str:
+    if not sid:
+        return "-"
+    import hashlib
+    return hashlib.sha256(str(sid).encode("utf-8")).hexdigest()[:10]
+
+
+def _auth_log(event: str, **fields):
+    safe = " ".join(f"{k}={v}" for k, v in fields.items())
+    print(f"[AUTH] {event}" + (f" | {safe}" if safe else ""))
 
 
 def _decode_token(raw: str) -> dict:
@@ -155,14 +168,15 @@ def register(data: RegisterIn, request: Request, response: Response):
 
     _, token = create_session(
         user_id,
-        remembered=data.remember_device,
+        remembered=True,
         device_name=detect_device(request),
     )
-    _set_auth_cookie(response, token, data.remember_device, request)
+    _set_auth_cookie(response, token, True, request)
+    _auth_log("LOGIN", user_id=user_id, remembered=True, device=detect_device(request), scheme=request.url.scheme)
     return {
         "access_token": token,
         "user": payload,
-        "remembered": data.remember_device,
+        "remembered": True,
     }
 
 
@@ -218,40 +232,41 @@ def session_bootstrap(
     response: Response,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
 ):
-    raw = request.cookies.get("lederg_auth")
-    source = "cookie"
-    if not raw and credentials:
-        raw = credentials.credentials
-        source = "authorization"
-
-    if not raw:
+    candidates = _auth_candidates(request, credentials)
+    if not candidates:
+        _auth_log("BOOT_NO_CREDENTIALS")
         raise HTTPException(401, "Сохранённой сессии нет")
 
-    payload = _decode_token(raw)
-    sid = payload.get("sid")
-    user_id = payload.get("sub")
-    if not sid or user_id is None:
-        # One-time migration path for pre-session JWTs.
+    for source, raw in candidates:
         try:
-            user_id = int(user_id)
-            exp = float(payload.get("exp", 0))
-            if not exp or exp <= datetime.now(timezone.utc).timestamp():
-                raise HTTPException(401, "Старая сессия истекла")
-        except HTTPException:
-            raise
-        except Exception:
-            raise HTTPException(401, "Старая сессия недействительна")
-        with SessionLocal() as db:
-            user = db.get(User, int(user_id))
-            if not user or not user.is_active:
-                raise HTTPException(401, "Пользователь недоступен")
-        _, token = create_session(int(user_id), remembered=True, device_name=detect_device(request))
-        _set_auth_cookie(response, token, True, request)
-        return {"access_token": token, "remembered": True, "migrated": True}
+            payload = _decode_token(raw)
+            sid = payload.get("sid")
+            user_id = payload.get("sub")
 
-    token, remembered, device = _session_token_from_sid(int(user_id), str(sid))
-    _set_auth_cookie(response, token, remembered, request)
-    return {"access_token": token, "remembered": remembered, "device_name": device, "source": source}
+            if not sid or user_id is None:
+                user_id = int(user_id)
+                exp = float(payload.get("exp", 0))
+                if not exp or exp <= datetime.now(timezone.utc).timestamp():
+                    raise HTTPException(401, "Старая сессия истекла")
+                with SessionLocal() as db:
+                    user = db.get(User, user_id)
+                    if not user or not user.is_active:
+                        raise HTTPException(401, "Пользователь недоступен")
+                _, token = create_session(user_id, remembered=True, device_name=detect_device(request))
+                _set_auth_cookie(response, token, True, request)
+                _auth_log("BOOT_MIGRATED", source=source, user_id=user_id)
+                return {"access_token": token, "remembered": True, "migrated": True, "source": source}
+
+            token, _, device = _session_token_from_sid(int(user_id), str(sid))
+            _set_auth_cookie(response, token, True, request)
+            _auth_log("BOOT_OK", source=source, user_id=int(user_id), sid=_short_sid(sid), device=device)
+            return {"access_token": token, "remembered": True, "device_name": device, "source": source}
+        except HTTPException as exc:
+            _auth_log("BOOT_FAIL", source=source, reason=str(exc.detail))
+        except Exception as exc:
+            _auth_log("BOOT_FAIL", source=source, reason=type(exc).__name__)
+
+    raise HTTPException(401, "Сохранённая сессия недействительна")
 
 
 @router.post("/refresh")
@@ -260,46 +275,39 @@ def refresh(
     response: Response,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
 ):
-    raw = request.cookies.get("lederg_auth") or (credentials.credentials if credentials else None)
-    if not raw:
+    candidates = _auth_candidates(request, credentials)
+    if not candidates:
         raise HTTPException(401, "Нужна активная сессия")
 
-    payload = _decode_token(raw)
-    try:
-        user_id = int(payload["sub"])
-    except Exception:
-        raise HTTPException(401, "Сессия недействительна")
+    for source, raw in candidates:
+        try:
+            payload = _decode_token(raw)
+            user_id = int(payload["sub"])
+            sid = payload.get("sid")
 
-    sid = payload.get("sid")
+            if not sid:
+                exp = payload.get("exp")
+                if not exp or float(exp) <= datetime.now(timezone.utc).timestamp():
+                    raise HTTPException(401, "Старая сессия истекла")
+                with SessionLocal() as db:
+                    user = db.get(User, user_id)
+                    if not user or not user.is_active:
+                        raise HTTPException(401, "Пользователь недоступен")
+                _, token = create_session(user_id, remembered=True, device_name=detect_device(request))
+                _set_auth_cookie(response, token, True, request)
+                _auth_log("REFRESH_MIGRATED", source=source, user_id=user_id)
+                return {"access_token": token, "remembered": True, "device_name": detect_device(request), "migrated": True}
 
-    if not sid:
-        exp = payload.get("exp")
-        if not exp or float(exp) <= datetime.now(timezone.utc).timestamp():
-            raise HTTPException(401, "Старая сессия истекла")
-        with SessionLocal() as db:
-            user = db.get(User, user_id)
-            if not user or not user.is_active:
-                raise HTTPException(401, "Пользователь недоступен")
-        _, token = create_session(
-            user_id,
-            remembered=True,
-            device_name=detect_device(request),
-        )
-        _set_auth_cookie(response, token, True, request)
-        return {
-            "access_token": token,
-            "remembered": True,
-            "device_name": detect_device(request),
-            "migrated": True,
-        }
+            token, _, device = _session_token_from_sid(user_id, str(sid))
+            _set_auth_cookie(response, token, True, request)
+            _auth_log("REFRESH_OK", source=source, user_id=user_id, sid=_short_sid(sid), device=device)
+            return {"access_token": token, "remembered": True, "device_name": device}
+        except HTTPException as exc:
+            _auth_log("REFRESH_FAIL", source=source, reason=str(exc.detail))
+        except Exception as exc:
+            _auth_log("REFRESH_FAIL", source=source, reason=type(exc).__name__)
 
-    token, remembered, device = _session_token_from_sid(user_id, str(sid))
-    _set_auth_cookie(response, token, remembered, request)
-    return {
-        "access_token": token,
-        "remembered": remembered,
-        "device_name": device,
-    }
+    raise HTTPException(401, "Активная сессия не найдена")
 
 
 @router.post("/logout")
@@ -308,20 +316,20 @@ def logout(
     response: Response,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
 ):
-    raw = request.cookies.get("lederg_auth") or (credentials.credentials if credentials else None)
-    sid = None
-    if raw:
+    revoked = set()
+    for source, raw in _auth_candidates(request, credentials):
         try:
             sid = _decode_token(raw).get("sid")
         except Exception:
             sid = None
-
-    if sid:
+        if not sid or sid in revoked:
+            continue
         with SessionLocal() as db:
             session = db.get(Session, sid)
             if session:
                 session.revoked = True
                 db.commit()
-
+                revoked.add(sid)
+                _auth_log("LOGOUT", source=source, user_id=session.user_id, sid=_short_sid(sid))
     response.delete_cookie("lederg_auth", path="/")
     return {"ok": True}

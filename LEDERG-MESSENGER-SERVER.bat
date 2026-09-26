@@ -174,10 +174,16 @@ exit /b 0
 
 :DB_GUARD
 cd /d "%APP_DIR%"
+echo.
+echo [ACTION] DB_GUARD
 echo [DB] Fast database health check...
+echo [DB] Python: %PYTHON%
+echo [DB] Module: server.db_guard
 "%PYTHON%" -m server.db_guard --no-backup --fast
-if errorlevel 20 exit /b 20
-if errorlevel 1 exit /b 1
+set "DB_RC=!ERRORLEVEL!"
+echo [DB] db_guard exit code: !DB_RC!
+if !DB_RC! EQU 20 exit /b 20
+if not !DB_RC! EQU 0 exit /b 1
 echo [DB] Health OK.
 exit /b 0
 

@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 import asyncio
 import os
+import time
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -76,6 +77,22 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+
+@app.middleware("http")
+async def request_trace(request, call_next):
+    if not request.url.path.startswith("/api"):
+        return await call_next(request)
+    started = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        elapsed = (time.perf_counter() - started) * 1000
+        print(f"[HTTP] {request.method} {request.url.path} EXCEPTION {type(exc).__name__} {elapsed:.1f}ms")
+        raise
+    elapsed = (time.perf_counter() - started) * 1000
+    print(f"[HTTP] {request.method} {request.url.path} -> {response.status_code} {elapsed:.1f}ms")
+    return response
 
 
 @app.middleware("http")

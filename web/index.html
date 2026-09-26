@@ -354,7 +354,7 @@ async function rawFetch(path,options={},token=state.token){
  if(!(options.body instanceof FormData))headers['Content-Type']='application/json';
  if(token)headers.Authorization='Bearer '+token;
  try{
-  return await fetch(path,{...options,headers,credentials:'same-origin'});
+  return await fetch(path,{...options,headers,credentials:'include',cache:'no-store'});
  }catch{
   const e=new Error('Сервер недоступен. Проверь соединение с LEDERG и попробуй ещё раз.');
   e.code='NETWORK';
@@ -395,28 +395,35 @@ function scheduleTokenRefresh(){
  state.refreshTimer=setTimeout(()=>refreshSession().catch(()=>{}),delay);
 }
 async function bootstrapSession(){
- for(let attempt=0;attempt<5;attempt++){
+ let attempt=0;
+ while(true){
+  attempt++;
   try{
    const headers={};
-   if(state.legacyToken)headers.Authorization='Bearer '+state.legacyToken;
+   const saved=localStorage.getItem('lederg_token')||state.legacyToken;
+   if(saved)headers.Authorization='Bearer '+saved;
    const r=await rawFetch('/api/auth/session',{method:'POST',headers},null);
    const data=await r.json().catch(()=>({}));
+   console.info('[LEDERG AUTH] bootstrap', {
+    attempt, status:r.status, savedToken:!!saved, source:data.source||null
+   });
    if(r.ok&&data.access_token){
     state.token=data.access_token;
-    state.sessionRemembered=data.remembered!==false;
-    // Keep the current device credential persistently as a local fallback.
-    // The HttpOnly cookie remains the primary credential, while this copy
-    // guarantees device resume even when a reverse proxy/browser drops cookies.
+    state.rememberDevice=true;
+    state.sessionRemembered=true;
     localStorage.setItem('lederg_token',state.token);
-    localStorage.setItem('lederg_session_remembered',state.sessionRemembered?'1':'0');
+    localStorage.setItem('lederg_remember_device','1');
+    localStorage.setItem('lederg_session_remembered','1');
     state.legacyToken=state.token;
     return true;
    }
    if(r.status===401)return false;
-  }catch{}
-  await new Promise(resolve=>setTimeout(resolve,Math.min(800*(attempt+1),3000)));
+  }catch(err){
+   showSessionState('Подключаемся к сохранённой сессии LEDERG…');
+   console.warn('[LEDERG AUTH] bootstrap error',err);
+  }
+  await new Promise(resolve=>setTimeout(resolve,Math.min(1000+attempt*1000,5000)));
  }
- return false;
 }
 
 async function refreshSession(){
@@ -1002,13 +1009,14 @@ $('authForm').onsubmit=async e=>{
    throw new Error(formatServerError(d,r.status));
   }
   state.token=d.access_token;
-  state.rememberDevice=remember;
-  state.sessionRemembered=remember;
+  state.rememberDevice=true;
+  state.sessionRemembered=true;
+  state.legacyToken=state.token;
   state.requires2fa=false;
   $('otpWrap').style.display='none';
   localStorage.setItem('lederg_token',state.token);
-  localStorage.setItem('lederg_remember_device',remember?'1':'0');
-  localStorage.setItem('lederg_session_remembered',remember?'1':'0');
+  localStorage.setItem('lederg_remember_device','1');
+  localStorage.setItem('lederg_session_remembered','1');
   scheduleTokenRefresh();
   setAuthBusy(false);
   await boot();
@@ -1066,6 +1074,8 @@ window.addEventListener('beforeunload',()=>{try{state.ws?.close()}catch{}});
 async function boot(){
  setTheme(state.theme);
  applyClientPrefs();
+ state.token=state.token||localStorage.getItem('lederg_token')||null;
+ state.legacyToken=localStorage.getItem('lederg_token')||state.legacyToken||null;
  if(!state.token){
   if(!(await bootstrapSession())){
    showAuth();
