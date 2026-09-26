@@ -947,7 +947,22 @@ $('blockChatUserBtn').onclick=async()=>{const uid=state.activeChat?.peer?.id;if(
 document.querySelectorAll('.quick-wall').forEach(b=>b.onclick=async()=>{if(b.dataset.wall==='gradient'){$('messages').style.backgroundImage='linear-gradient(135deg,rgba(24,70,105,.95),rgba(17,28,42,.98))'}else applyWallpaper(null)});
 window.addEventListener('resize',()=>{if(innerWidth>760){$('sidebar').classList.remove('hidden');$('chatPane').classList.remove('open')}});
 window.addEventListener('beforeunload',()=>{try{state.ws?.close()}catch{}});
-async function boot(){try{await loadMe();await loadCallConfig();setTheme(state.theme);applyClientPrefs();showApp();await loadChats();connectWS();updateNotifyPrompt()}catch(e){showAuth()}}
+async function boot(){
+ try{
+  await loadMe();
+  await loadCallConfig();
+  setTheme(state.theme);
+  applyClientPrefs();
+  scheduleTokenRefresh();
+  showApp();
+  await loadChats();
+  connectWS();
+  updateNotifyPrompt();
+ }catch(e){
+  showAuth();
+  if($('authError'))$('authError').textContent=e.message||'Не удалось восстановить сессию.';
+ }
+}
 setAuthMode('login');setTheme(state.theme);applyClientPrefs();
 if(state.token)boot();else showAuth();
 </script>
