@@ -38,6 +38,7 @@ def _add_missing_user_columns(conn):
         "avatar_public": "ALTER TABLE users ADD COLUMN avatar_public BOOLEAN NOT NULL DEFAULT 1",
         "read_receipts": "ALTER TABLE users ADD COLUMN read_receipts BOOLEAN NOT NULL DEFAULT 1",
         "allow_messages": "ALTER TABLE users ADD COLUMN allow_messages BOOLEAN NOT NULL DEFAULT 1",
+        "allow_calls": "ALTER TABLE users ADD COLUMN allow_calls BOOLEAN NOT NULL DEFAULT 1",
         "two_factor_enabled": "ALTER TABLE users ADD COLUMN two_factor_enabled BOOLEAN NOT NULL DEFAULT 0",
         "two_factor_secret": "ALTER TABLE users ADD COLUMN two_factor_secret VARCHAR(64)",
     }
