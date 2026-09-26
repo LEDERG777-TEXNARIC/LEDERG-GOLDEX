@@ -51,8 +51,11 @@ def validate_session(user_id: int, session_id: str | None) -> bool:
         s = db.get(Session, session_id)
         if not s or s.revoked or s.user_id != user_id:
             return False
-        s.last_seen_at = datetime.now(timezone.utc)
-        db.commit()
+        now = datetime.now(timezone.utc)
+        # Do not write SQLite on every API request; update the device heartbeat at most once/minute.
+        if not s.last_seen_at or (now - s.last_seen_at).total_seconds() >= 60:
+            s.last_seen_at = now
+            db.commit()
         return True
 
 def current_user(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)):
