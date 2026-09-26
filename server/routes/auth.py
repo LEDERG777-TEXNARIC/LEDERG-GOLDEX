@@ -3,7 +3,7 @@ import re
 
 import jwt
 import pyotp
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -90,8 +90,47 @@ def user_payload(user: User):
     }
 
 
+def _set_auth_cookie(response: Response, token: str, remember_device: bool, request: Request):
+    response.set_cookie(
+        "lederg_auth",
+        token,
+        max_age=(365 * 24 * 60 * 60) if remember_device else None,
+        httponly=True,
+        secure=request.url.scheme == "https",
+        samesite="lax",
+        path="/",
+    )
+
+
+def _decode_token(raw: str) -> dict:
+    try:
+        return jwt.decode(
+            raw,
+            settings.secret_key,
+            algorithms=["HS256"],
+            options={"verify_exp": False},
+        )
+    except Exception:
+        raise HTTPException(401, "Сессия недействительна")
+
+
+def _session_token_from_sid(user_id: int, sid: str) -> tuple[str, bool, str]:
+    with SessionLocal() as db:
+        session = db.get(Session, sid)
+        user = db.get(User, user_id)
+        if not session or session.revoked or session.user_id != user_id:
+            raise HTTPException(401, "Сессия завершена")
+        if not user or not user.is_active:
+            raise HTTPException(401, "Пользователь недоступен")
+        session.last_seen_at = datetime.now(timezone.utc)
+        db.commit()
+        ttl = settings.token_minutes if session.remembered else min(settings.token_minutes, 720)
+        token = make_token(user_id, sid, ttl)
+        return token, bool(session.remembered), session.device_name or "LEDERG device"
+
+
 @router.post("/register")
-def register(data: RegisterIn, request: Request):
+def register(data: RegisterIn, request: Request, response: Response):
     username = normalize_username(data.username)
     display_name = normalize_display_name(data.display_name)
 
@@ -119,6 +158,7 @@ def register(data: RegisterIn, request: Request):
         remembered=data.remember_device,
         device_name=detect_device(request),
     )
+    _set_auth_cookie(response, token, data.remember_device, request)
     return {
         "access_token": token,
         "user": payload,
@@ -127,7 +167,7 @@ def register(data: RegisterIn, request: Request):
 
 
 @router.post("/login")
-def login(data: LoginIn, request: Request):
+def login(data: LoginIn, request: Request, response: Response):
     username = normalize_username(data.username)
 
     with SessionLocal() as db:
@@ -164,11 +204,54 @@ def login(data: LoginIn, request: Request):
         remembered=data.remember_device,
         device_name=detect_device(request),
     )
+    _set_auth_cookie(response, token, data.remember_device, request)
     return {
         "access_token": token,
         "user": payload,
         "remembered": data.remember_device,
     }
+
+
+@router.post("/session")
+def session_bootstrap(
+    request: Request,
+    response: Response,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+):
+    raw = request.cookies.get("lederg_auth")
+    source = "cookie"
+    if not raw and credentials:
+        raw = credentials.credentials
+        source = "authorization"
+
+    if not raw:
+        raise HTTPException(401, "Сохранённой сессии нет")
+
+    payload = _decode_token(raw)
+    sid = payload.get("sid")
+    user_id = payload.get("sub")
+    if not sid or user_id is None:
+        # One-time migration path for pre-session JWTs.
+        try:
+            user_id = int(user_id)
+            exp = float(payload.get("exp", 0))
+            if not exp or exp <= datetime.now(timezone.utc).timestamp():
+                raise HTTPException(401, "Старая сессия истекла")
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(401, "Старая сессия недействительна")
+        with SessionLocal() as db:
+            user = db.get(User, int(user_id))
+            if not user or not user.is_active:
+                raise HTTPException(401, "Пользователь недоступен")
+        _, token = create_session(int(user_id), remembered=True, device_name=detect_device(request))
+        _set_auth_cookie(response, token, True, request)
+        return {"access_token": token, "remembered": True, "migrated": True}
+
+    token, remembered, device = _session_token_from_sid(int(user_id), str(sid))
+    _set_auth_cookie(response, token, remembered, request)
+    return {"access_token": token, "remembered": remembered, "device_name": device, "source": source}
 
 
 @router.post("/refresh")
