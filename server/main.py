@@ -90,6 +90,16 @@ app.mount("/media", StaticFiles(directory=media_dir), name="media")
 web_dir = Path(__file__).resolve().parent.parent / "web"
 app.mount("/", StaticFiles(directory=web_dir, html=True), name="web")
 
+@app.get("/api/ping")
+def api_ping():
+    return {"ok": True, "service": "lederg-messenger"}
+
+
+@app.get("/api/health/db")
+def api_db_health():
+    return health()
+
+
 @app.get("/health")
 def health():
     try:
