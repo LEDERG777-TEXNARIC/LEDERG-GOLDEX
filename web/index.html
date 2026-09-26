@@ -405,9 +405,75 @@ function setAuthMode(mode){
  $('tabLogin').classList.toggle('active',mode==='login');
  $('tabRegister').classList.toggle('active',mode==='register');
  $('displayName').style.display=mode==='register'?'block':'none';
+ $('displayNameLabel').style.display=mode==='register'?'block':'none';
+ $('registerPasswordTools').style.display=mode==='register'?'block':'none';
+ $('passwordConfirm').value='';
  $('authButton').textContent=mode==='register'?'Создать аккаунт':'Войти';
+ $('authHelp').textContent=mode==='register'
+  ?'Аккаунт создаётся сразу. Пароль можно сгенерировать автоматически и сохранить менеджером паролей браузера.'
+  :'Сессия хранится на этом устройстве. Ею можно управлять в разделе «Безопасность → Активные сессии».';
  $('authError').textContent='';
- state.requires2fa=false;$('otpCode').style.display='none';$('otpCode').value='';
+ state.requires2fa=false;
+ $('otpWrap').style.display='none';
+ $('otpCode').value='';
+ $('password').autocomplete=mode==='register'?'new-password':'current-password';
+ $('rememberDevice').checked=state.rememberDevice;
+ updatePasswordStrength();
+}
+function setAuthBusy(busy){
+ state.authBusy=busy;
+ $('authButton').disabled=busy;
+ $('tabLogin').disabled=busy;
+ $('tabRegister').disabled=busy;
+ $('authButton').textContent=busy?'Подождите…':(state.authMode==='register'?'Создать аккаунт':(state.requires2fa?'Подтвердить вход':'Войти'));
+}
+function secureRandomIndex(max){
+ if(max<=1)return 0;
+ const limit=Math.floor(256/max)*max;
+ const buf=new Uint8Array(1);
+ do{crypto.getRandomValues(buf)}while(buf[0]>=limit);
+ return buf[0]%max;
+}
+function generateSecurePassword(length=20){
+ const sets=['ABCDEFGHJKLMNPQRSTUVWXYZ','abcdefghijkmnopqrstuvwxyz','23456789','!@#$%^&*_-+='];
+ const chars=sets.map(s=>s[secureRandomIndex(s.length)]);
+ const pool=sets.join('');
+ while(chars.length<length)chars.push(pool[secureRandomIndex(pool.length)]);
+ for(let i=chars.length-1;i>0;i--){const j=secureRandomIndex(i+1);[chars[i],chars[j]]=[chars[j],chars[i]]}
+ return chars.join('');
+}
+function updatePasswordStrength(){
+ const p=$('password')?.value||'';
+ const bar=$('passwordStrengthBar'),label=$('passwordStrengthText');
+ if(!bar||!label)return;
+ let score=0;
+ if(p.length>=8)score++;
+ if(p.length>=12)score++;
+ if(/[a-z]/.test(p)&&/[A-Z]/.test(p))score++;
+ if(/\d/.test(p))score++;
+ if(/[^A-Za-z0-9]/.test(p))score++;
+ const pct=[0,20,45,65,82,100][score];
+ bar.style.width=pct+'%';
+ label.textContent=!p?'':score<3?'Пароль слабый':score<5?'Пароль хороший':'Пароль сильный';
+}
+async function copyAuthPassword(){
+ const p=$('password').value;
+ if(!p)return;
+ try{
+  await navigator.clipboard.writeText(p);
+  $('copyPassword').textContent='✅ Скопировано';
+  setTimeout(()=>{if($('copyPassword'))$('copyPassword').textContent='📋 Копировать'},1300);
+ }catch{
+  $('password').focus();$('password').select();
+  document.execCommand('copy');
+ }
+}
+function togglePasswordField(id,buttonId){
+ const input=$(id),button=$(buttonId);
+ if(!input||!button)return;
+ const visible=input.type==='text';
+ input.type=visible?'password':'text';
+ button.setAttribute('aria-label',visible?'Показать пароль':'Скрыть пароль');
 }
 function applyMyProfile(){
  const u=state.user;
@@ -602,7 +668,20 @@ function connectWS(){
  }catch{}
 }
 function sendWS(data){if(state.ws?.readyState===WebSocket.OPEN)state.ws.send(JSON.stringify(data))}
-function logout(){localStorage.removeItem('lederg_token');state.token=null;state.user=null;state.ws?.close();state.ws=null;showAuth()}
+function logout(revoke=true){
+ const token=state.token;
+ clearTimeout(state.refreshTimer);
+ state.refreshTimer=null;
+ if(revoke&&token){
+  fetch('/api/auth/logout',{method:'POST',headers:{Authorization:'Bearer '+token}}).catch(()=>{});
+ }
+ localStorage.removeItem('lederg_token');
+ state.token=null;
+ state.user=null;
+ state.ws?.close();
+ state.ws=null;
+ showAuth();
+}
 async function saveProfile(){
  const fd=new FormData();
  const fields=[
