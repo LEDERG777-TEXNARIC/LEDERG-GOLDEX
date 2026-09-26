@@ -827,25 +827,90 @@ async function clearWallpaper(){
 function logoutAndClose(){closeSettings();logout()}
 $('tabLogin').onclick=()=>setAuthMode('login');
 $('tabRegister').onclick=()=>setAuthMode('register');
+$('rememberDevice').onchange=()=>{
+ state.rememberDevice=$('rememberDevice').checked;
+ localStorage.setItem('lederg_remember_device',state.rememberDevice?'1':'0');
+};
+$('password').oninput=updatePasswordStrength;
+$('passwordToggle').onclick=()=>togglePasswordField('password','passwordToggle');
+$('passwordConfirmToggle').onclick=()=>togglePasswordField('passwordConfirm','passwordConfirmToggle');
+$('generatePassword').onclick=()=>{
+ const p=generateSecurePassword(20);
+ $('password').value=p;
+ $('passwordConfirm').value=p;
+ $('password').type='text';
+ $('passwordConfirm').type='text';
+ $('passwordToggle').setAttribute('aria-label','Скрыть пароль');
+ $('passwordConfirmToggle').setAttribute('aria-label','Скрыть повтор пароля');
+ updatePasswordStrength();
+};
+$('copyPassword').onclick=copyAuthPassword;
 $('authForm').onsubmit=async e=>{
- e.preventDefault();$('authError').textContent='';
- const body={username:$('username').value,password:$('password').value};
- if(state.authMode==='register')body.display_name=$('displayName').value;
- if(state.requires2fa)body.otp_code=$('otpCode').value.trim();
+ e.preventDefault();
+ if(state.authBusy)return;
+ $('authError').textContent='';
+ const mode=state.authMode;
+ const username=$('username').value.trim().replace(/^@+/,'');
+ const password=$('password').value;
+ const remember=$('rememberDevice').checked;
+ const displayName=$('displayName').value.trim();
+ const confirm=$('passwordConfirm').value;
+
+ if(!/^[a-zA-Z0-9_.-]{3,32}$/.test(username)){
+  $('authError').textContent='Никнейм: 3–32 символа, только латиница, цифры, _, - и .';
+  $('username').focus();return;
+ }
+ if(mode==='register'){
+  if(!displayName){$('authError').textContent='Введи имя.';$('displayName').focus();return}
+  if(displayName.length>80){$('authError').textContent='Имя слишком длинное.';$('displayName').focus();return}
+  if(password.length<8){$('authError').textContent='Пароль должен быть минимум 8 символов.';$('password').focus();return}
+  if(password!==confirm){$('authError').textContent='Пароли не совпадают.';$('passwordConfirm').focus();return}
+ }else if(password.length<8){
+  $('authError').textContent='Введи пароль (минимум 8 символов).';
+  $('password').focus();return;
+ }
+ if(state.requires2fa&&!/^\d{6,8}$/.test($('otpCode').value.replace(/\s/g,''))){
+  $('authError').textContent='Введи код из приложения-аутентификатора.';
+  $('otpCode').focus();return;
+ }
+
+ const body={username,password,remember_device:remember};
+ if(mode==='register')body.display_name=displayName;
+ if(state.requires2fa)body.otp_code=$('otpCode').value.replace(/\s/g,'');
+
+ setAuthBusy(true);
  try{
-  const r=await fetch(state.authMode==='register'?'/api/auth/register':'/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const r=await rawFetch(mode==='register'?'/api/auth/register':'/api/auth/login',{
+   method:'POST',
+   headers:{'Content-Type':'application/json'},
+   body:JSON.stringify(body)
+  },null);
   const d=await r.json().catch(()=>({}));
   if(!r.ok){
-    if(d.detail?.requires_2fa){
-      state.requires2fa=true;$('otpCode').style.display='block';$('authButton').textContent='Подтвердить вход';$('authError').textContent=d.detail.message||'Введите код 2FA';$('otpCode').focus();return;
-    }
-    throw new Error(typeof d.detail==='string'?d.detail:'Ошибка сервера');
+   if(d.detail?.requires_2fa){
+    state.requires2fa=true;
+    $('otpWrap').style.display='block';
+    $('authError').textContent=d.detail.message||'Введи код 2FA.';
+    setAuthBusy(false);
+    $('otpCode').focus();
+    return;
+   }
+   throw new Error(formatServerError(d,r.status));
   }
-  state.requires2fa=false;$('otpCode').style.display='none';$('authButton').textContent='Войти';
-  state.token=d.access_token;localStorage.setItem('lederg_token',state.token);await boot();
- }catch(err){$('authError').textContent=err.message}
+  state.token=d.access_token;
+  state.rememberDevice=remember;
+  state.requires2fa=false;
+  $('otpWrap').style.display='none';
+  localStorage.setItem('lederg_token',state.token);
+  localStorage.setItem('lederg_remember_device',remember?'1':'0');
+  scheduleTokenRefresh();
+  setAuthBusy(false);
+  await boot();
+ }catch(err){
+  setAuthBusy(false);
+  $('authError').textContent=err.message||'Не удалось войти.';
+ }
 };
-
 $('settingsBtn').onclick=()=>openSettings();
 $('notifyAllowBtn').onclick=()=>requestNotificationPermission();
 $('notifyLaterBtn').onclick=()=>{$('notifyPrompt').style.display='none'};
