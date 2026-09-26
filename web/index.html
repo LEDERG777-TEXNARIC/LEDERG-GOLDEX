@@ -29,6 +29,7 @@ body.light{--bg:#edf2f7;--panel:#fff;--panel2:#f3f6fa;--line:#d8e0e8;--text:#172
 .tabs{display:grid;grid-template-columns:1fr 1fr;background:var(--panel2);border-radius:14px;padding:4px;margin-bottom:18px}
 .tabs button{padding:11px;border-radius:10px;background:transparent;color:var(--muted)}
 .tabs button.active{background:var(--accent);color:#fff}
+body.black .tabs button.active{color:#000}
 .field,.search,.settings-input,.settings-select,.settings-textarea{width:100%;padding:13px 14px;border-radius:13px;border:1px solid var(--line);background:var(--panel2);color:var(--text);outline:none}
 .field{margin-bottom:10px}
 .field:focus,.search:focus,.settings-input:focus,.settings-select:focus,.settings-textarea:focus{border-color:var(--accent)}
@@ -365,6 +366,7 @@ function scheduleTokenRefresh(){
  if(!state.token)return;
  const exp=parseJwtExp(state.token);
  if(!exp)return;
+ if(!state.sessionRemembered)return;
  const delay=Math.max(60000,exp-Date.now()-24*60*60*1000);
  state.refreshTimer=setTimeout(()=>refreshSession().catch(()=>{}),delay);
 }
@@ -676,6 +678,7 @@ function logout(revoke=true){
   fetch('/api/auth/logout',{method:'POST',headers:{Authorization:'Bearer '+token}}).catch(()=>{});
  }
  localStorage.removeItem('lederg_token');
+ localStorage.removeItem('lederg_session_remembered');
  state.token=null;
  state.user=null;
  state.ws?.close();
@@ -899,10 +902,12 @@ $('authForm').onsubmit=async e=>{
   }
   state.token=d.access_token;
   state.rememberDevice=remember;
+  state.sessionRemembered=remember;
   state.requires2fa=false;
   $('otpWrap').style.display='none';
   localStorage.setItem('lederg_token',state.token);
   localStorage.setItem('lederg_remember_device',remember?'1':'0');
+  localStorage.setItem('lederg_session_remembered',remember?'1':'0');
   scheduleTokenRefresh();
   setAuthBusy(false);
   await boot();
