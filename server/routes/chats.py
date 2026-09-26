@@ -233,6 +233,7 @@ def chat_settings(chat_id: int, me=Depends(current_user)):
         return {
             "chat_id": chat_id,
             "wallpaper_url": f"/media/{pref.wallpaper_path}" if pref and pref.wallpaper_path else None,
+            "muted": bool(pref.muted) if pref else False,
         }
 
 @router.post("/chats/{chat_id}/wallpaper")
