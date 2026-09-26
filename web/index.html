@@ -303,7 +303,8 @@ body.light .settings-nav button.active{color:var(--text)}
 
 <script>
 const state={
- token:localStorage.getItem('lederg_token'),
+ token:null,
+ legacyToken:localStorage.getItem('lederg_token'),
  user:null,
  chats:[],
  activeChat:null,
@@ -352,8 +353,13 @@ async function rawFetch(path,options={},token=state.token){
  const headers={...(options.headers||{})};
  if(!(options.body instanceof FormData))headers['Content-Type']='application/json';
  if(token)headers.Authorization='Bearer '+token;
- try{return await fetch(path,{...options,headers})}
- catch{const e=new Error('Сервер недоступен. Проверь соединение с LEDERG и попробуй ещё раз.');e.code='NETWORK';throw e}
+ try{
+  return await fetch(path,{...options,headers,credentials:'same-origin'});
+ }catch{
+  const e=new Error('Сервер недоступен. Проверь соединение с LEDERG и попробуй ещё раз.');
+  e.code='NETWORK';
+  throw e;
+ }
 }
 function formatServerError(data,status){
  const detail=data?.detail;
@@ -388,6 +394,22 @@ function scheduleTokenRefresh(){
  const delay=Math.max(60000,exp-Date.now()-24*60*60*1000);
  state.refreshTimer=setTimeout(()=>refreshSession().catch(()=>{}),delay);
 }
+async function bootstrapSession(){
+ try{
+  const headers={};
+  if(state.legacyToken)headers.Authorization='Bearer '+state.legacyToken;
+  const r=await rawFetch('/api/auth/session',{method:'POST',headers},null);
+  const data=await r.json().catch(()=>({}));
+  if(!r.ok||!data.access_token)return false;
+  state.token=data.access_token;
+  state.sessionRemembered=data.remembered!==false;
+  localStorage.removeItem('lederg_token');
+  localStorage.setItem('lederg_session_remembered',state.sessionRemembered?'1':'0');
+  state.legacyToken=null;
+  return true;
+ }catch{return false}
+}
+
 async function refreshSession(){
  if(!state.token||state.sessionRecovering)return false;
  try{
@@ -1031,9 +1053,14 @@ document.querySelectorAll('.quick-wall').forEach(b=>b.onclick=async()=>{if(b.dat
 window.addEventListener('resize',()=>{if(innerWidth>760){$('sidebar').classList.remove('hidden');$('chatPane').classList.remove('open')}});
 window.addEventListener('beforeunload',()=>{try{state.ws?.close()}catch{}});
 async function boot(){
- if(!state.token){showAuth();return}
  setTheme(state.theme);
  applyClientPrefs();
+ if(!state.token){
+  if(!(await bootstrapSession())){
+   showAuth();
+   return;
+  }
+ }
  showApp();
  try{if(typeof loadCallConfig==='function')await loadCallConfig()}catch{}
  if(await refreshSession()&&await loadMe()){
@@ -1044,7 +1071,6 @@ async function boot(){
   hideSessionState();
   return;
  }
- // Never erase a saved session because of one bad request or server restart.
  showSessionState('Восстанавливаем сохранённую сессию…');
  recoverSession().catch(()=>{});
  updateNotifyPrompt();
