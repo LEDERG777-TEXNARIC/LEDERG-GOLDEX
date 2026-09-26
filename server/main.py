@@ -11,6 +11,7 @@ from server.routes.auth import router as auth_router
 from server.routes.users import router as users_router
 from server.routes.chats import router as chats_router
 from server.routes.ws import router as ws_router
+from server.routes.calls import router as calls_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -34,6 +35,7 @@ app.include_router(auth_router, prefix="/api/auth")
 app.include_router(users_router, prefix="/api/users")
 app.include_router(chats_router, prefix="/api")
 app.include_router(ws_router)
+app.include_router(calls_router, prefix="/api/calls")
 
 media_dir = Path(settings.data_dir) / "uploads"
 media_dir.mkdir(parents=True, exist_ok=True)
