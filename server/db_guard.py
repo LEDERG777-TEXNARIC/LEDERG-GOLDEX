@@ -56,41 +56,80 @@ def _latest_backup() -> Path | None:
     return files[0] if files else None
 
 
-def _create_backup() -> Path:
-    source = db_path()
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    final = backup_dir() / f"lederg-db-{stamp}.db"
-    temp = backup_dir() / f".{final.name}.tmp"
-
-    if temp.exists():
-        temp.unlink(missing_ok=True)
-
-    src = sqlite3.connect(source, timeout=30)
-    try:
-        dst = sqlite3.connect(temp, timeout=30)
+def _acquire_backup_lock() -> int | None:
+    """Serialize backup creation across the BAT process and the app watchdog."""
+    lock = backup_dir() / ".backup.lock"
+    for _ in range(2):
         try:
-            src.backup(dst)
-        finally:
-            dst.close()
+            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, f"{os.getpid()}\n".encode("ascii", "ignore"))
+            return fd
+        except FileExistsError:
+            try:
+                if time.time() - lock.stat().st_mtime > 300:
+                    lock.unlink(missing_ok=True)
+                    continue
+            except OSError:
+                pass
+            return None
+    return None
+
+
+def _release_backup_lock(fd: int | None) -> None:
+    lock = backup_dir() / ".backup.lock"
+    if fd is None:
+        return
+    try:
+        os.close(fd)
     finally:
-        src.close()
+        lock.unlink(missing_ok=True)
 
-    ok, errors = _integrity(temp)
-    if not ok:
-        temp.unlink(missing_ok=True)
-        raise RuntimeError("backup verification failed: " + "; ".join(errors))
 
-    os.replace(temp, final)
+def _create_backup() -> Path:
+    lock_fd = _acquire_backup_lock()
+    if lock_fd is None:
+        latest = _latest_backup()
+        if latest:
+            return latest
+        raise RuntimeError("backup already running")
 
-    backups = sorted(
-        backup_dir().glob("lederg-db-*.db"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    for stale in backups[MAX_BACKUPS:]:
-        stale.unlink(missing_ok=True)
+    try:
+        source = db_path()
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
+        final = backup_dir() / f"lederg-db-{stamp}.db"
+        temp = backup_dir() / f".{final.name}.tmp"
 
-    return final
+        if temp.exists():
+            temp.unlink(missing_ok=True)
+
+        src = sqlite3.connect(source, timeout=30)
+        try:
+            dst = sqlite3.connect(temp, timeout=30)
+            try:
+                src.backup(dst)
+            finally:
+                dst.close()
+        finally:
+            src.close()
+
+        ok, errors = _integrity(temp)
+        if not ok:
+            temp.unlink(missing_ok=True)
+            raise RuntimeError("backup verification failed: " + "; ".join(errors))
+
+        os.replace(temp, final)
+
+        backups = sorted(
+            backup_dir().glob("lederg-db-*.db"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for stale in backups[MAX_BACKUPS:]:
+            stale.unlink(missing_ok=True)
+
+        return final
+    finally:
+        _release_backup_lock(lock_fd)
 
 
 def _backup_if_due(force: bool = False) -> Path | None:

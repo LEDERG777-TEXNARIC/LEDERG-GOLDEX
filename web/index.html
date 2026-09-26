@@ -395,23 +395,29 @@ function scheduleTokenRefresh(){
  state.refreshTimer=setTimeout(()=>refreshSession().catch(()=>{}),delay);
 }
 async function bootstrapSession(){
- try{
-  const headers={};
-  if(state.legacyToken)headers.Authorization='Bearer '+state.legacyToken;
-  const r=await rawFetch('/api/auth/session',{method:'POST',headers},null);
-  const data=await r.json().catch(()=>({}));
-  if(!r.ok||!data.access_token)return false;
-  state.token=data.access_token;
-  state.sessionRemembered=data.remembered!==false;
-  localStorage.removeItem('lederg_token');
-  localStorage.setItem('lederg_session_remembered',state.sessionRemembered?'1':'0');
-  state.legacyToken=null;
-  return true;
- }catch{return false}
+ for(let attempt=0;attempt<5;attempt++){
+  try{
+   const headers={};
+   if(state.legacyToken)headers.Authorization='Bearer '+state.legacyToken;
+   const r=await rawFetch('/api/auth/session',{method:'POST',headers},null);
+   const data=await r.json().catch(()=>({}));
+   if(r.ok&&data.access_token){
+    state.token=data.access_token;
+    state.sessionRemembered=data.remembered!==false;
+    localStorage.removeItem('lederg_token');
+    localStorage.setItem('lederg_session_remembered',state.sessionRemembered?'1':'0');
+    state.legacyToken=null;
+    return true;
+   }
+   if(r.status===401)return false;
+  }catch{}
+  await new Promise(resolve=>setTimeout(resolve,Math.min(800*(attempt+1),3000)));
+ }
+ return false;
 }
 
 async function refreshSession(){
- if(!state.token||state.sessionRecovering)return false;
+ if(!state.token)return false;
  try{
   const r=await rawFetch('/api/auth/refresh',{method:'POST'},state.token);
   const data=await r.json().catch(()=>({}));

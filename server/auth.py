@@ -52,8 +52,17 @@ def validate_session(user_id: int, session_id: str | None) -> bool:
         if not s or s.revoked or s.user_id != user_id:
             return False
         now = datetime.now(timezone.utc)
+        # SQLite returns DateTime(timezone=True) values as naive datetimes.
+        # Normalize persisted timestamps to UTC before comparing them.
+        last_seen = s.last_seen_at
+        if last_seen is not None:
+            if last_seen.tzinfo is None:
+                last_seen = last_seen.replace(tzinfo=timezone.utc)
+            else:
+                last_seen = last_seen.astimezone(timezone.utc)
+
         # Do not write SQLite on every API request; update the device heartbeat at most once/minute.
-        if not s.last_seen_at or (now - s.last_seen_at).total_seconds() >= 60:
+        if not last_seen or (now - last_seen).total_seconds() >= 60:
             s.last_seen_at = now
             db.commit()
         return True
