@@ -26,21 +26,23 @@ def backup_dir() -> Path:
     return path
 
 
-def _integrity(path: Path) -> tuple[bool, list[str]]:
+def _integrity(path: Path, deep: bool = True) -> tuple[bool, list[str]]:
     if not path.exists():
         return False, ["database file does not exist"]
 
     errors: list[str] = []
     try:
         with sqlite3.connect(path, timeout=30) as conn:
+            conn.execute("PRAGMA busy_timeout=30000")
             quick = str(conn.execute("PRAGMA quick_check").fetchone()[0])
             if quick != "ok":
                 full = str(conn.execute("PRAGMA integrity_check").fetchone()[0])
                 errors.append(f"quick_check={quick}")
                 errors.append(f"integrity_check={full}")
-            fk = conn.execute("PRAGMA foreign_key_check").fetchall()
-            if fk:
-                errors.append(f"foreign_key_check={len(fk)} violation(s)")
+            if deep:
+                fk = conn.execute("PRAGMA foreign_key_check").fetchall()
+                if fk:
+                    errors.append(f"foreign_key_check={len(fk)} violation(s)")
     except Exception as exc:
         errors.append(f"sqlite={exc}")
 
@@ -97,41 +99,56 @@ def _create_backup() -> Path:
         source = db_path()
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
         final = backup_dir() / f"lederg-db-{stamp}.db"
-        temp = backup_dir() / f".{final.name}.tmp"
 
-        if temp.exists():
-            temp.unlink(missing_ok=True)
-
-        src = sqlite3.connect(source, timeout=30)
-        try:
-            dst = sqlite3.connect(temp, timeout=30)
+        last_error = "unknown backup error"
+        for attempt in range(8):
             try:
-                src.backup(dst)
-            finally:
-                dst.close()
-        finally:
-            src.close()
+                # Write directly to the final unique backup file. On Windows,
+                # os.replace can fail when antivirus/indexer temporarily holds
+                # the just-closed temporary SQLite file.
+                if final.exists():
+                    final.unlink(missing_ok=True)
 
-        ok, errors = _integrity(temp)
-        if not ok:
-            temp.unlink(missing_ok=True)
-            raise RuntimeError("backup verification failed: " + "; ".join(errors))
+                src = sqlite3.connect(source, timeout=30)
+                try:
+                    dst = sqlite3.connect(final, timeout=30)
+                    try:
+                        src.backup(dst)
+                    finally:
+                        dst.close()
+                finally:
+                    src.close()
 
-        os.replace(temp, final)
+                ok, errors = _integrity(final, deep=True)
+                if not ok:
+                    last_error = "backup verification failed: " + "; ".join(errors)
+                    final.unlink(missing_ok=True)
+                    raise RuntimeError(last_error)
 
-        backups = sorted(
-            backup_dir().glob("lederg-db-*.db"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
-        for stale in backups[MAX_BACKUPS:]:
-            stale.unlink(missing_ok=True)
+                backups = sorted(
+                    backup_dir().glob("lederg-db-*.db"),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                )
+                for stale in backups[MAX_BACKUPS:]:
+                    try:
+                        stale.unlink(missing_ok=True)
+                    except OSError:
+                        pass
 
-        return final
+                return final
+            except (OSError, sqlite3.Error, RuntimeError) as exc:
+                last_error = str(exc)
+                try:
+                    final.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                if attempt < 7:
+                    time.sleep(0.75 + attempt * 0.5)
+                    continue
+                raise RuntimeError(last_error)
     finally:
         _release_backup_lock(lock_fd)
-
-
 def _backup_if_due(force: bool = False) -> Path | None:
     latest = _latest_backup()
     if not force and latest:
@@ -173,7 +190,7 @@ def _repair_from_backup() -> tuple[bool, str]:
     return False, "no verified backup available"
 
 
-def guard_database(create_backup: bool = True) -> tuple[bool, list[str]]:
+def guard_database(create_backup: bool = True, deep: bool = True) -> tuple[bool, list[str]]:
     settings.ensure_dirs()
 
     try:
@@ -181,12 +198,13 @@ def guard_database(create_backup: bool = True) -> tuple[bool, list[str]]:
     except Exception as exc:
         return False, [f"schema initialization failed: {exc}"]
 
-    ok, errors = _integrity(db_path())
+    ok, errors = _integrity(db_path(), deep=deep)
     if not ok:
         return False, errors
 
     try:
         with sqlite3.connect(db_path(), timeout=30) as conn:
+            conn.execute("PRAGMA busy_timeout=30000")
             conn.execute("PRAGMA optimize")
             conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
     except Exception as exc:
@@ -243,6 +261,8 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(description="LEDERG database guard")
     parser.add_argument("--repair", action="store_true")
+    parser.add_argument("--no-backup", action="store_true", help="health/schema check without creating a backup")
+    parser.add_argument("--fast", action="store_true", help="lightweight watchdog check")
     args = parser.parse_args(argv)
 
     if args.repair:
@@ -250,7 +270,10 @@ def main(argv: list[str] | None = None) -> int:
         print("[DB] " + message)
         return 0 if ok else 2
 
-    ok, messages = guard_database(create_backup=True)
+    ok, messages = guard_database(
+        create_backup=not args.no_backup,
+        deep=not args.fast,
+    )
     if ok:
         print("[DB] GUARD OK")
         for item in messages:

@@ -17,10 +17,19 @@ from server.routes.ws import router as ws_router
 from server.routes.calls import router as calls_router
 
 async def _database_watchdog():
+    cycle = 0
     while True:
-        await asyncio.sleep(60)
+        await asyncio.sleep(30)
+        cycle += 1
         try:
-            ok, messages = await asyncio.to_thread(guard_database, True)
+            # Fast health check every 30s. A full verification + verified
+            # backup runs every 5 minutes from this single watchdog only.
+            do_deep_cycle = cycle % 10 == 0
+            ok, messages = await asyncio.to_thread(
+                guard_database,
+                do_deep_cycle,
+                do_deep_cycle,
+            )
             if ok:
                 if messages:
                     print("[DB-WATCH] " + " | ".join(messages))
@@ -41,7 +50,7 @@ async def lifespan(app: FastAPI):
     for folder in ("avatars", "wallpapers"):
         (Path(settings.data_dir) / "uploads" / folder).mkdir(parents=True, exist_ok=True)
 
-    ok, messages = guard_database(True)
+    ok, messages = guard_database(True, deep=True)
     if not ok:
         raise RuntimeError("[DB-WATCH] database is not healthy: " + " | ".join(messages))
     if messages:

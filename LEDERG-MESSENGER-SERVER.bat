@@ -9,9 +9,9 @@ set "PYTHON=%APP_DIR%\.venv\Scripts\python.exe"
 set "HOST=0.0.0.0"
 set "PORT=8000"
 set "CHECK_SECONDS=30"
-set "RESTART_SECONDS=3"
-set "DB_CHECK_EVERY=2"
+set "DB_CHECK_EVERY=1"
 set "DB_CYCLE=0"
+set "RESTART_SECONDS=3"
 set "SERVER_PID="
 
 echo ============================================================
@@ -23,7 +23,8 @@ echo ============================================================
 echo.
 echo run.py runs in background with LIVE console logs.
 echo GitHub is checked every %CHECK_SECONDS% seconds.
-echo New commit = stop -> update -> pip -> restart.
+echo Database is checked every %CHECK_SECONDS% seconds.
+echo New commit = stop - update - pip - restart.
 echo.
 
 if not exist "%APP_DIR%\run.py" (
@@ -65,6 +66,7 @@ if errorlevel 20 (
         goto MAIN
     )
 )
+
 call :FREE_PORT
 if errorlevel 1 (
     echo [PORT] Could not free port %PORT%.
@@ -72,35 +74,7 @@ if errorlevel 1 (
     goto MAIN
 )
 
-call :DB_GUARD
-cd /d "%APP_DIR%"
-echo [DB] Intelligent database guard...
-"%PYTHON%" "%APP_DIR%\scripts\db_maintenance.py"
-if errorlevel 20 (
-    echo [DB] Guard reports corruption or an unsafe database state.
-    exit /b 20
-)
-if errorlevel 1 (
-    echo [DB] Guard could not complete. Current database will be kept; retrying later.
-    exit /b 1
-)
-echo [DB] Database healthy, schema normalized, verified backup maintained.
-exit /b 0
-
-
-:DB_REPAIR
-cd /d "%APP_DIR%"
-echo [DB] Starting automatic database repair...
-"%PYTHON%" "%APP_DIR%\scripts\db_maintenance.py" --repair
-if errorlevel 1 (
-    echo [DB] Automatic repair FAILED.
-    exit /b 1
-)
-echo [DB] Automatic repair completed.
-exit /b 0
-
-
-:START_SERVER
+call :START_SERVER
 if errorlevel 1 (
     echo [SERVER] run.py failed to open port %PORT%.
     timeout /t %RESTART_SECONDS% /nobreak >nul
@@ -124,7 +98,6 @@ if !DB_CYCLE! GEQ %DB_CHECK_EVERY% (
         if errorlevel 1 (
             echo [DB] Repair failed. Autopilot will retry automatically.
             timeout /t %RESTART_SECONDS% /nobreak >nul
-            goto MAIN
         )
         goto MAIN
     )
@@ -152,7 +125,6 @@ if errorlevel 2 (
 
 goto MONITOR
 
-
 :CHECK_REMOTE
 cd /d "%APP_DIR%"
 echo [GIT] Checking GitHub...
@@ -175,7 +147,6 @@ echo [GIT] Update available.
 echo [GIT] Local : !LOCAL_COMMIT!
 echo [GIT] Remote: !REMOTE_COMMIT!
 exit /b 2
-
 
 :APPLY_UPDATE
 cd /d "%APP_DIR%"
@@ -201,6 +172,25 @@ for /f "delims=" %%A in ('git rev-parse HEAD') do set "NEW_COMMIT=%%A"
 echo [GIT] Running revision: !NEW_COMMIT!
 exit /b 0
 
+:DB_GUARD
+cd /d "%APP_DIR%"
+echo [DB] Fast database health check...
+"%PYTHON%" "%APP_DIR%\scripts\db_maintenance.py" --no-backup --fast
+if errorlevel 20 exit /b 20
+if errorlevel 1 exit /b 1
+echo [DB] Health OK.
+exit /b 0
+
+:DB_REPAIR
+cd /d "%APP_DIR%"
+echo [DB] Starting automatic database repair...
+"%PYTHON%" "%APP_DIR%\scripts\db_maintenance.py" --repair
+if errorlevel 1 (
+    echo [DB] Automatic repair FAILED.
+    exit /b 1
+)
+echo [DB] Automatic repair completed.
+exit /b 0
 
 :START_SERVER
 echo.
@@ -226,12 +216,10 @@ for /l %%N in (1,1,10) do (
 
 exit /b 1
 
-
 :SERVER_ALIVE
 call :GET_PORT_PID
 if defined SERVER_PID exit /b 0
 exit /b 1
-
 
 :GET_PORT_PID
 set "SERVER_PID="
@@ -241,7 +229,6 @@ for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":%PORT% " ^| findstr /
 )
 :GET_PORT_PID_DONE
 exit /b 0
-
 
 :STOP_SERVER
 call :GET_PORT_PID
@@ -255,7 +242,6 @@ powershell -NoProfile -Command "Stop-Process -Id !SERVER_PID! -Force -ErrorActio
 set "SERVER_PID="
 timeout /t 1 /nobreak >nul
 exit /b 0
-
 
 :FREE_PORT
 set "FOUND_PORT=0"
