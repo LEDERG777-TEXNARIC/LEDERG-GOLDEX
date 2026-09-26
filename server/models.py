@@ -21,6 +21,7 @@ class User(Base):
     avatar_public: Mapped[bool] = mapped_column(Boolean, default=True)
     read_receipts: Mapped[bool] = mapped_column(Boolean, default=True)
     allow_messages: Mapped[bool] = mapped_column(Boolean, default=True)
+    allow_calls: Mapped[bool] = mapped_column(Boolean, default=True)
     two_factor_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     two_factor_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
