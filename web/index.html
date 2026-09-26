@@ -574,7 +574,18 @@ function updatePresence(uid,online){
  }
 }
 
-const ICE_SERVERS=[{urls:'stun:stun.cloudflare.com:3478'}];
+let ICE_SERVERS=[{urls:'stun:stun.cloudflare.com:3478'}];
+async function loadCallConfig(){
+ try{
+  const d=await api('/api/calls/config');
+  const configured=Array.isArray(d.ice_servers)?d.ice_servers.filter(x=>x&&x.urls):[];
+  state.iceServers=configured.length?configured:[{urls:'stun:stun.cloudflare.com:3478'}];
+  ICE_SERVERS=state.iceServers;
+ }catch{
+  state.iceServers=[{urls:'stun:stun.cloudflare.com:3478'}];
+  ICE_SERVERS=state.iceServers;
+ }
+}
 function showCall(){ $('callModal').style.display='grid' }
 function callStatus(t){$('callStatus').textContent=t}
 function cleanupCall(sendEnd=true){
