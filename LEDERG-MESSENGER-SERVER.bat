@@ -46,6 +46,7 @@ powershell -NoProfile -Command "git -C '%APP_DIR%' remote set-url origin '%REPO_
 :MAIN
 echo.
 echo [ACTION] MAIN_CYCLE
+echo [AUTOPILOT] Starting decision cycle...
 echo ============================================================
 echo [%DATE% %TIME%] SERVER CYCLE
 echo ============================================================
@@ -238,8 +239,14 @@ for /l %%N in (1,1,10) do (
 exit /b 1
 
 :SERVER_ALIVE
+echo [ACTION] SERVER_ALIVE
 call :GET_PORT_PID
-if defined SERVER_PID exit /b 0
+if defined SERVER_PID (
+    echo [SERVER] LISTENING PID !SERVER_PID!
+    exit /b 0
+)
+echo [SERVER] NOT LISTENING
+exit /b 1
 exit /b 1
 
 :GET_PORT_PID
@@ -267,6 +274,7 @@ timeout /t 1 /nobreak >nul
 exit /b 0
 
 :FREE_PORT
+echo [ACTION] FREE_PORT
 set "FOUND_PORT=0"
 
 for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":%PORT% " ^| findstr /I "LISTENING"') do (
