@@ -1,4 +1,4 @@
-# LEDERG Messenger full autopilot
+# LEDERG Messenger self-healing autopilot
 param([switch]$Once)
 
 $ErrorActionPreference = "Stop"
@@ -31,7 +31,10 @@ function Run-Git([string[]]$Args) {
     if ($LASTEXITCODE -ne 0) { throw "git $($Args -join ' ') failed: $out" }
     return $out
 }
-function Head([string]$Ref) { return (& git -C $AppDir rev-parse $Ref).Trim() }
+
+function Head([string]$Ref) {
+    return (& git -C $AppDir rev-parse $Ref).Trim()
+}
 
 function Ensure-Repo {
     if (Test-Path (Join-Path $AppDir ".git")) {
@@ -106,29 +109,90 @@ set "LEDERG_PORT=$Port"
     if ($LASTEXITCODE -ne 0) { throw "Server scheduled task creation failed" }
 }
 
-function Start-Server {
-    & schtasks /Run /TN $ServerTask 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "Server scheduled task start failed" }
-    Start-Sleep -Seconds 4
+function Get-LedergRunProcesses {
+    try {
+        return @(
+            Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.Name -match '^python(w)?\.exe$' -and
+                $_.CommandLine -and
+                $_.CommandLine -like "*$AppDir*run.py*"
+            }
+        )
+    } catch {
+        return @()
+    }
 }
 
-function Stop-Server {
+function Get-PortPids {
+    try {
+        $connections = Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction Stop
+        return @($connections | Select-Object -ExpandProperty OwningProcess -Unique)
+    } catch {
+        $lines = netstat -ano -p tcp 2>$null | Select-String ":$Port\s+.*LISTENING\s+(\d+)$"
+        return @($lines | ForEach-Object { [int]$_.Matches[0].Groups[1].Value } | Select-Object -Unique)
+    }
+}
+
+function Port-Free {
+    return ((Get-PortPids).Count -eq 0)
+}
+
+function Stop-LedergServer {
     & schtasks /End /TN $ServerTask 2>&1 | Out-Null
     Start-Sleep -Seconds 2
 
-    try {
-        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-            Where-Object { $_.CommandLine -like "*$AppDir\run.py*" } |
-            ForEach-Object {
-                Invoke-CimMethod -InputObject $_ -MethodName Terminate -ErrorAction SilentlyContinue | Out-Null
+    foreach ($proc in @(Get-LedergRunProcesses)) {
+        try {
+            Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+        } catch {}
+    }
+
+    foreach ($pid in @(Get-PortPids)) {
+        try {
+            $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$pid" -ErrorAction SilentlyContinue
+            $cmdline = $proc.CommandLine
+            if ($cmdline -and $cmdline -like "*$AppDir*run.py*") {
+                Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+            } elseif ($proc.Name -match '^python(w)?\.exe$' -and $cmdline -and $cmdline -like "*$AppDir*") {
+                Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+            } else {
+                Log "Port $Port is occupied by PID $pid outside LEDERG. It will NOT be killed."
             }
-    } catch {}
-    Start-Sleep -Seconds 1
+        } catch {}
+    }
+
+    $deadline = (Get-Date).AddSeconds(15)
+    while ((Get-Date) -lt $deadline) {
+        if (Port-Free) { return }
+        Start-Sleep -Milliseconds 500
+    }
+
+    if (-not (Port-Free)) {
+        throw "Port $Port is still occupied after LEDERG shutdown"
+    }
+}
+
+function Start-LedergServer {
+    if (-not (Port-Free)) {
+        Stop-LedergServer
+    }
+
+    & schtasks /Run /TN $ServerTask 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Server scheduled task start failed" }
+
+    $deadline = (Get-Date).AddSeconds(30)
+    while ((Get-Date) -lt $deadline) {
+        if (Is-Healthy) { return }
+        Start-Sleep -Seconds 1
+    }
+
+    throw "LEDERG server did not become healthy on port $Port"
 }
 
 function Is-Healthy {
     try {
-        $r = Invoke-RestMethod "http://127.0.0.1:$Port/health" -TimeoutSec 8
+        $r = Invoke-RestMethod "http://127.0.0.1:$Port/health" -TimeoutSec 5
         return ($r.ok -eq $true -and $r.database -eq "ok")
     } catch {
         return $false
@@ -160,8 +224,8 @@ function Backup-Database {
 function Restore-Database([string]$Backup) {
     if (-not $Backup) { return }
     $db = Join-Path $DataDir "lederg.db"
-    Copy-Item $Backup $db -Force
 
+    Copy-Item $Backup $db -Force
     foreach ($suffix in @("-wal","-shm")) {
         $src = "$Backup$suffix"
         $dst = "$db$suffix"
@@ -184,6 +248,7 @@ function Read-GoodHistory {
 }
 
 function Record-Good([string]$Commit) {
+    if (-not $Commit -or $Commit -notmatch "^[0-9a-f]{40}$") { return }
     $items = @($Commit) + (Read-GoodHistory)
     $items = @($items | Select-Object -Unique | Select-Object -First 10)
     Set-Content -LiteralPath $GoodHistory -Value $items -Encoding ASCII
@@ -191,28 +256,35 @@ function Record-Good([string]$Commit) {
 }
 
 function Best-Rollback([string]$Current) {
-    $items = Read-GoodHistory
-    foreach ($item in $items) {
+    foreach ($item in (Read-GoodHistory)) {
         if ($item -ne $Current) { return $item }
     }
     return $null
 }
 
-function Ensure-Task {
+function Ensure-AutopilotTask {
     $supervisor = "C:\LEDERG-MESSENGER-BOOT\supervisor.ps1"
-    if (-not (Test-Path $supervisor)) { return $false }
-    $cmd = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $supervisor + '"'
-    & schtasks /Create /TN "LEDERG-AUTOPILOT" /SC ONSTART /RU SYSTEM /RL HIGHEST /F /TR $cmd 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        Log "Could not create autopilot startup task."
-        return $false
-    }
-    return $true
+    if (-not (Test-Path $supervisor)) { return }
+    & schtasks /Query /TN "LEDERG-AUTOPILOT" 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) { return }
+
+    $tr = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $supervisor + '"'
+    & schtasks /Create /TN "LEDERG-AUTOPILOT" /SC ONSTART /RU SYSTEM /RL HIGHEST /F /TR $tr 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { Log "Could not create autopilot startup task." }
 }
 
-try {
-    if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw "Git not found in PATH" }
+function Run-Repair {
+    $py = Ensure-Venv
+    Stop-LedergServer
+    Compile-Check $py
+    Install-Dependencies $py
+    DB-Check $py
+    Create-Server-Task
+    Start-LedergServer
+    if (-not (Is-Healthy)) { throw "Repair health check failed" }
+}
 
+function Update-Once {
     Ensure-Repo
     $py = Ensure-Venv
 
@@ -220,80 +292,84 @@ try {
 
     $local = Head "HEAD"
     $remote = Head "origin/$Branch"
-    $good = Best-Rollback $local
 
-    if (-not (Test-Path $GoodFile) -and (Is-Healthy)) {
+    # Make sure a currently healthy revision is always recorded before risking an update.
+    if (Is-Healthy) {
         Record-Good $local
-        $good = Best-Rollback $local
-        Log "Initial known-good revision recorded: $local"
     }
 
     if ($local -eq $remote) {
-        if (-not (Is-Healthy)) {
-            Log "Current revision is unhealthy. Restarting."
-            Stop-Server
-            Compile-Check $py
-            Create-Server-Task
-            Start-Server
-
-            if (-not (Is-Healthy)) {
-                $rollback = Best-Rollback $local
-                if ($rollback) {
-                    Log "Current revision still unhealthy. Rolling back to previous stable $rollback."
-                    Stop-Server
-                    Run-Git @("reset","--hard",$rollback) | Out-Null
-                    Compile-Check $py
-                    Install-Dependencies $py
-                    DB-Check $py
-                    Create-Server-Task
-                    Start-Server
-                    if (-not (Is-Healthy)) { throw "Previous stable revision is also unhealthy" }
-                    Record-Good $rollback
-                    Log "ROLLBACK SUCCESS: $rollback"
-                } else {
-                    throw "Server unhealthy and no previous stable revision is recorded"
-                }
-            }
+        if (Is-Healthy) {
+            Ensure-AutopilotTask
+            return
         }
-    } else {
-        Log "NEW REVISION: $local -> $remote"
 
-        Stop-Server
+        Log "LEDERG is unhealthy on current revision $local. Attempting self-heal."
+        try {
+            Run-Repair
+            Ensure-AutopilotTask
+            return
+        } catch {
+            Log "Self-heal failed: $($_.Exception.Message)"
+        }
+    }
+
+    Log "NEW REVISION: $local -> $remote"
+
+    $backup = $null
+    $rollback = $local
+
+    try {
+        if (Is-Healthy) {
+            Record-Good $local
+            $rollback = $local
+        } else {
+            $rollback = Best-Rollback $local
+            if (-not $rollback) { $rollback = $local }
+        }
+
+        Stop-LedergServer
         $backup = Backup-Database
 
+        Run-Git @("reset","--hard",$remote) | Out-Null
+        Run-Git @("clean","-fd") | Out-Null
+
+        $py = Ensure-Venv
+        Compile-Check $py
+        Install-Dependencies $py
+        DB-Check $py
+        Create-Server-Task
+        Start-LedergServer
+
+        if (-not (Is-Healthy)) {
+            throw "New revision failed health check"
+        }
+
+        Record-Good $remote
+        Log "UPDATE SUCCESS: $remote"
+    } catch {
+        Log "UPDATE FAILED: $($_.Exception.Message)"
+
         try {
-            Run-Git @("reset","--hard",$remote) | Out-Null
-            Run-Git @("clean","-fd") | Out-Null
-            $py = Ensure-Venv
-            Compile-Check $py
-            Install-Dependencies $py
-            DB-Check $py
-            Create-Server-Task
-            Start-Server
+            Stop-LedergServer
 
-            if (-not (Is-Healthy)) { throw "New revision failed health check" }
-
-            Record-Good $remote
-            Log "UPDATE SUCCESS: $remote is now known-good."
-        } catch {
-            Log "UPDATE FAILED: $($_.Exception.Message)"
-
-            $rollback = if ($local -and $local -match "^[0-9a-f]{40}$") { $local } else { $good }
-            if (-not $rollback) { $rollback = Best-Rollback $local }
-
+            if (-not $rollback -or $rollback -notmatch "^[0-9a-f]{40}$") {
+                $rollback = Best-Rollback $local
+            }
             if (-not $rollback) {
                 throw "No stable revision available for rollback"
             }
 
-            Stop-Server
+            Log "ROLLBACK TO STABLE REVISION: $rollback"
             Run-Git @("reset","--hard",$rollback) | Out-Null
+
             $py = Ensure-Venv
             Compile-Check $py
             Install-Dependencies $py
             if ($backup) { Restore-Database $backup }
             DB-Check $py
             Create-Server-Task
-            Start-Server
+            Start-LedergServer
 
             if (-not (Is-Healthy)) {
                 throw "Rollback health check failed"
@@ -301,18 +377,47 @@ try {
 
             Record-Good $rollback
             Log "ROLLBACK SUCCESS: $rollback"
+        } catch {
+            Log "CRITICAL: rollback failed too: $($_.Exception.Message)"
+            try { Stop-LedergServer } catch {}
+            throw
         }
     }
 
-    Ensure-Task | Out-Null
-    if (-not (Is-Healthy)) {
+    Ensure-AutopilotTask
+}
+
+try {
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw "Git not found in PATH" }
+
+    Ensure-Repo
+    $py = Ensure-Venv
+    Ensure-AutopilotTask
+
+    if (-not (Test-Path $ServerTaskBat)) {
         Create-Server-Task
-        Start-Server
-        if (-not (Is-Healthy)) { throw "Server is not healthy after recovery" }
     }
 
-    if ($Once) {
-        exit 0
+    if (-not (Is-Healthy)) {
+        try {
+            Log "Initial LEDERG health check failed. Restarting the application."
+            Start-LedergServer
+        } catch {
+            Log "Initial start failed: $($_.Exception.Message)"
+        }
+    }
+
+    Update-Once
+
+    if (-not $Once) {
+        while ($true) {
+            Start-Sleep -Seconds 60
+            try {
+                Update-Once
+            } catch {
+                Log "AUTOPILOT CYCLE FAILED: $($_.Exception.Message)"
+            }
+        }
     }
 } catch {
     Log "FATAL: $($_.Exception.Message)"
