@@ -10,6 +10,12 @@
  --accent:#3f91ff;--accent2:#2d7ce0;--bubble:#244c76;--bubble2:#172331;--green:#2bd673;--danger:#ff5a67;
  --shadow:0 18px 60px rgba(0,0,0,.35);
 }
+body.black{--bg:#000;--panel:#050505;--panel2:#0d0d0d;--line:#202020;--text:#fff;--muted:#8a8a8a;--bubble:#1b1b1b;--bubble2:#0d0d0d;--accent:#fff;--accent2:#f2f2f2;--shadow:0 18px 60px rgba(0,0,0,.65)}
+body.black .primary{color:#000}
+body.black .send{color:#000}
+body.white{--bg:#fff;--panel:#fff;--panel2:#f6f6f6;--line:#dedede;--text:#000;--muted:#6e6e6e;--bubble:#ededed;--bubble2:#fff;--accent:#000;--accent2:#111;--shadow:0 18px 50px rgba(0,0,0,.12)}
+body.white .primary{color:#fff}
+body.white .send{color:#fff}
 *{box-sizing:border-box}
 html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:Inter,Segoe UI,Arial,sans-serif}
 .no-animations *{transition:none!important;animation:none!important}
@@ -171,6 +177,8 @@ body.light .settings-nav button.active{color:var(--text)}
           <div id="chatSub" class="online-line"></div>
         </div>
         <div class="head-actions">
+          <button id="callAudioBtn" class="icon-btn" title="Аудиозвонок">☎</button>
+          <button id="callVideoBtn" class="icon-btn" title="Видеозвонок">◉</button>
           <button id="chatSettingsBtn" class="icon-btn" title="Настройки чата">⚙</button>
         </div>
       </div>
@@ -198,6 +206,8 @@ body.light .settings-nav button.active{color:var(--text)}
   </div>
  </div>
 </div>
+
+<div id="callModal" class="modal-backdrop" style="display:none"><div class="modal" style="max-width:700px"><div class="modal-head"><div class="modal-title" id="callTitle">LEDERG Call</div><button id="callClose" class="icon-btn">✕</button></div><div class="settings-content"><div id="incomingCallBox" class="notice" style="display:none;margin-bottom:12px"></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><video id="localVideo" autoplay muted playsinline style="width:100%;background:#000;border-radius:14px;min-height:220px;object-fit:cover"></video><video id="remoteVideo" autoplay playsinline style="width:100%;background:#000;border-radius:14px;min-height:220px;object-fit:cover"></video></div><audio id="remoteAudio" autoplay></audio><div id="callStatus" class="notice" style="margin-top:12px">Готово.</div><div class="settings-actions"><button id="acceptCall" class="primary" style="width:auto;display:none">Принять</button><button id="rejectCall" class="danger" style="display:none">Отклонить</button><button id="hangupCall" class="danger">Завершить</button><button id="muteMic" class="secondary">Микрофон</button><button id="toggleCamera" class="secondary">Камера</button></div></div></div></div>
 
 <div id="chatSettingsModal" class="modal-backdrop" style="display:none">
  <div class="modal" style="max-width:560px">
@@ -240,8 +250,12 @@ const state={
  searchTimer:null,
  searchUsers:[],
  typingTimer:null,
- notificationEnabled:localStorage.getItem('lederg_notify')==='1',
- theme:localStorage.getItem('lederg_theme')||'dark',
+ notificationEnabled:localStorage.getItem('lederg_notify')!=='0',
+ notificationPermission:('Notification' in window)?Notification.permission:'unsupported',
+ notificationSound:localStorage.getItem('lederg_notify_sound')!=='0',
+ notificationPrivate:localStorage.getItem('lederg_notify_private')!=='0',
+ notificationPreview:localStorage.getItem('lederg_notify_preview')!=='0',
+ theme:localStorage.getItem('lederg_theme')||'black',
  activeSettings:'profile',
  requires2fa:false,
  textSize:localStorage.getItem('lederg_text_size')||'16',
@@ -254,7 +268,7 @@ function escapeHtml(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;',
 function initials(name){return (name||'L').trim().slice(0,1).toUpperCase()}
 function time(v){if(!v)return '';try{return new Date(v).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}catch{return ''}}
 function avatarHtml(u,cls='avatar'){const url=u?.avatar_url;return url?'<div class="'+cls+'"><img src="'+escapeHtml(url)+'?v='+(u?.id||Date.now())+'" alt=""></div>':'<div class="'+cls+'">'+escapeHtml(initials(u?.display_name))+'</div>'}
-function setTheme(t){state.theme=t;localStorage.setItem('lederg_theme',t);document.body.classList.toggle('light',t==='light')}
+function setTheme(t){state.theme=t;localStorage.setItem('lederg_theme',t);document.body.classList.remove('light','black','white');document.body.classList.add(t==='white'?'white':'black')}
 function applyClientPrefs(){
  document.documentElement.style.setProperty('--msg-size',state.textSize+'px');
  document.body.classList.toggle('no-animations',!state.animations);
@@ -389,8 +403,8 @@ function connectWS(){
       if(c){c.last_message=d.message;renderChats()}
       const isActive=state.activeChat?.id===d.message.chat_id;
       addMessage(d.message,true);
-      if(!isActive&&d.message.sender_id!==state.user.id&&state.notificationEnabled&&document.hidden&&'Notification' in window&&Notification.permission==='granted'){
-        new Notification(d.message.sender?.display_name||'LEDERG',{body:d.message.text||'Новое сообщение'});
+      if(!isActive&&d.message.sender_id!==state.user.id&&state.notificationEnabled&&state.notificationPrivate&&document.hidden){playNotificationSound();if('Notification' in window&&Notification.permission==='granted'){
+        new Notification(d.message.sender?.display_name||'LEDERG',{body:state.notificationPreview?(d.message.text||'Новое сообщение'):'Новое сообщение'});
       }
     }else if(d.type==='chat_created'){
       loadChats();
@@ -414,13 +428,20 @@ async function saveProfile(){
  fd.append('username',$('setUsername').value.trim());
  fd.append('display_name',$('setDisplayName').value.trim());
  fd.append('bio',$('setBio').value);
- for(const id of ['setDiscoverable','setPresence','setAvatarPublic','setReadReceipts','setAllowMessages'])fd.append(id==='setDiscoverable'?'discoverable':id==='setPresence'?'presence_visible':id==='setAvatarPublic'?'avatar_public':id==='setReadReceipts'?'read_receipts':'allow_messages',$(id).dataset.on==='1'?'true':'false');
- const f=$('avatarFile').files[0];if(f)fd.append('avatar',f);
- if($('removeAvatar').checked)fd.append('remove_avatar','true');
- const old=state.user;
+ for(const id of ['setDiscoverable','setPresence','setAvatarPublic','setReadReceipts','setAllowMessages','setAllowCalls']){
+   const key=id==='setDiscoverable'?'discoverable':id==='setPresence'?'presence_visible':id==='setAvatarPublic'?'avatar_public':id==='setReadReceipts'?'read_receipts':id==='setAllowMessages'?'allow_messages':'allow_calls';
+   fd.append(key,$(id).dataset.on==='1'?'true':'false');
+ }
  try{
-  state.user=await api('/api/users/me',{method:'PUT',body:fd});
-  applyMyProfile();await loadChats();$('setSaveStatus').textContent='Сохранено';if(old.username!==state.user.username)alert('Никнейм изменён. Теперь вход выполняется по новому нику.');
+   state.user=await api('/api/users/me',{method:'PUT',body:fd});
+   const file=$('avatarFile')?.files?.[0];
+   if(file){
+     const x=new FormData();x.append('avatar',file);
+     state.user=await api('/api/users/me/avatar',{method:'PUT',body:x});
+   }else if($('removeAvatar')?.checked){
+     state.user=await api('/api/users/me/avatar',{method:'DELETE'});
+   }
+   applyMyProfile();await loadChats();$('setSaveStatus').textContent='Сохранено';
  }catch(e){$('setSaveStatus').textContent=e.message}
 }
 function toggleEl(el){el.dataset.on=el.dataset.on==='1'?'0':'1';el.classList.toggle('on',el.dataset.on==='1')}
@@ -437,20 +458,20 @@ function renderSettings(section){
    return;
  }
  if(section==='privacy'){
-   c.innerHTML='<div class="setting-section"><div class="setting-title">Приватность</div>'+settingToggle('setDiscoverable','Показывать в глобальном поиске','Можно найти по @нику или имени.',state.user.discoverable)+settingToggle('setPresence','Показывать статус «в сети»','Зелёный индикатор виден только когда ты реально подключён.',state.user.presence_visible)+settingToggle('setAvatarPublic','Показывать аватар другим','Если выключено, чужие пользователи не получают URL аватарки.',state.user.avatar_public)+settingToggle('setReadReceipts','Отправлять статусы прочтения','Разрешить события read в личных чатах.',state.user.read_receipts)+settingToggle('setAllowMessages','Разрешать новые сообщения','Выключи, чтобы новые люди не могли начать с тобой чат.',state.user.allow_messages)+'</div><div class="notice">LEDERG не требует телефон, e-mail или настоящее имя. Приложение не хранит IP-адреса в пользовательской БД и отключает access-лог Uvicorn. Но провайдер CloudPub и сетевые узлы могут иметь собственные технические логи.</div>';
-   ['setDiscoverable','setPresence','setAvatarPublic','setReadReceipts','setAllowMessages'].forEach(id=>$(id).onclick=()=>toggleEl($(id)));
+   c.innerHTML='<div class="setting-section"><div class="setting-title">Приватность</div>'+settingToggle('setDiscoverable','Показывать в глобальном поиске','Можно найти по @нику или имени.',state.user.discoverable)+settingToggle('setPresence','Показывать статус «в сети»','Зелёный индикатор виден только когда ты реально подключён.',state.user.presence_visible)+settingToggle('setAvatarPublic','Показывать аватар другим','Если выключено, чужие пользователи не получают URL аватарки.',state.user.avatar_public)+settingToggle('setReadReceipts','Отправлять статусы прочтения','Разрешить события read в личных чатах.',state.user.read_receipts)+settingToggle('setAllowMessages','Разрешать новые сообщения','Выключи, чтобы новые люди не могли начать с тобой чат.',state.user.allow_messages)+settingToggle('setAllowCalls','Разрешать звонки','Разрешить другим пользователям звонить тебе.',state.user.allow_calls)+'</div><div class="notice">LEDERG не требует телефон, e-mail или настоящее имя. Приложение не хранит IP-адреса в пользовательской БД и отключает access-лог Uvicorn. Но провайдер CloudPub и сетевые узлы могут иметь собственные технические логи.</div>';
+   ['setDiscoverable','setPresence','setAvatarPublic','setReadReceipts','setAllowMessages','setAllowCalls'].forEach(id=>$(id).onclick=()=>toggleEl($(id)));
    return;
  }
  if(section==='appearance'){
-   c.innerHTML='<div class="setting-section"><div class="setting-title">Оформление</div><div class="settings-row"><div><div>Тема</div><div class="desc">Тёмная или светлая оболочка.</div></div><select id="themeSelect" class="settings-select" style="max-width:180px"><option value="dark">Тёмная</option><option value="light">Светлая</option></select></div><div class="settings-row"><div><div>Размер текста</div><div class="desc">Размер текста сообщений.</div></div><input id="textSize" type="range" min="13" max="22" step="1" value="'+escapeHtml(state.textSize)+'"></div>'+settingToggle('setAnimations','Анимации','Включить плавные переходы интерфейса.',state.animations)+settingToggle('setSendEnter','Отправлять Enter','Enter отправляет сообщение, Shift+Enter — новая строка.',state.sendByEnter)+'</div><div class="notice">Фон конкретного личного чата меняется отдельно через ⚙ в шапке.</div>';
-   $('themeSelect').value=state.theme;$('themeSelect').onchange=e=>setTheme(e.target.value);
+   c.innerHTML='<div class="setting-section"><div class="setting-title">Оформление</div><div class="settings-row"><div><div>Тема</div><div class="desc">Тёмная или светлая оболочка.</div></div><select id="themeSelect" class="settings-select" style="max-width:180px"><option value="black">Чёрная</option><option value="white">Белая</option></select></div><div class="settings-row"><div><div>Размер текста</div><div class="desc">Размер текста сообщений.</div></div><input id="textSize" type="range" min="13" max="22" step="1" value="'+escapeHtml(state.textSize)+'"></div>'+settingToggle('setAnimations','Анимации','Включить плавные переходы интерфейса.',state.animations)+settingToggle('setSendEnter','Отправлять Enter','Enter отправляет сообщение, Shift+Enter — новая строка.',state.sendByEnter)+'</div><div class="notice">Фон конкретного личного чата меняется отдельно через ⚙ в шапке.</div>';
+   $('themeSelect').value=state.theme==='white'?'white':'black';$('themeSelect').onchange=e=>setTheme(e.target.value);
    $('textSize').oninput=e=>{state.textSize=e.target.value;localStorage.setItem('lederg_text_size',state.textSize);applyClientPrefs()};
    $('setAnimations').onclick=()=>{toggleEl($('setAnimations'));state.animations=$('setAnimations').dataset.on==='1';localStorage.setItem('lederg_animations',state.animations?'1':'0');applyClientPrefs()};
    $('setSendEnter').onclick=()=>{toggleEl($('setSendEnter'));state.sendByEnter=$('setSendEnter').dataset.on==='1';localStorage.setItem('lederg_send_enter',state.sendByEnter)};
    return;
  }
  if(section==='notifications'){
-   c.innerHTML='<div class="setting-section"><div class="setting-title">Уведомления</div>'+settingToggle('setNotify','Браузерные уведомления','Показывать новые сообщения, когда вкладка скрыта.',state.notificationEnabled)+'</div>';
+   c.innerHTML='<div class="setting-section"><div class="setting-title">Уведомления и звук</div>'+settingToggle('setNotify','Уведомления','Включены по умолчанию.',state.notificationEnabled)+settingToggle('setNotifyPrivate','Личные сообщения','Уведомлять о новых ЛС.',state.notificationPrivate)+settingToggle('setNotifySound','Звук LEDERG','Кастомный трёхнотный сигнал.',state.notificationSound)+settingToggle('setNotifyPreview','Показывать текст','Показывать текст сообщения в системном уведомлении.',state.notificationPreview)+'</div><div class="settings-actions"><button id="testNotifySound" class="secondary">Тест LEDERG-звука</button><button id="askNotifyPermission" class="secondary">Запросить разрешение</button></div><div id="notifyPermissionStatus" class="notice" style="margin-top:12px"></div>';
    $('setNotify').onclick=async()=>{toggleEl($('setNotify'));state.notificationEnabled=$('setNotify').dataset.on==='1';localStorage.setItem('lederg_notify',state.notificationEnabled?'1':'0');if(state.notificationEnabled&&'Notification'in window&&Notification.permission==='default')await Notification.requestPermission();};
    return;
  }
@@ -494,6 +515,8 @@ async function render2FA(){
   };
  }
 }
+async function requestNotificationPermission(){if(!('Notification' in window))return;try{const p=await Notification.requestPermission();state.notificationPermission=p;if($('notifyPermissionStatus'))$('notifyPermissionStatus').textContent='Разрешение браузера: '+p}catch{}}
+function playNotificationSound(){if(!state.notificationSound)return;try{const C=window.AudioContext||window.webkitAudioContext;if(!C)return;const ctx=new C(),t=ctx.currentTime;[659.25,783.99,987.77].forEach((f,i)=>{const o=ctx.createOscillator(),g=ctx.createGain();o.type='sine';o.frequency.value=f;g.gain.setValueAtTime(.0001,t+i*.08);g.gain.exponentialRampToValueAtTime(.12,t+i*.08+.015);g.gain.exponentialRampToValueAtTime(.0001,t+i*.08+.22);o.connect(g);g.connect(ctx.destination);o.start(t+i*.08);o.stop(t+i*.08+.24)});setTimeout(()=>ctx.close().catch(()=>{}),700)}catch{}}
 function openSettings(section=state.activeSettings){$('settingsModal').style.display='grid';renderSettings(section)}
 function closeSettings(){$('settingsModal').style.display='none'}
 async function loadChatWallpaper(chatId){
@@ -567,7 +590,7 @@ $('blockChatUserBtn').onclick=async()=>{const uid=state.activeChat?.peer?.id;if(
 document.querySelectorAll('.quick-wall').forEach(b=>b.onclick=async()=>{if(b.dataset.wall==='gradient'){$('messages').style.backgroundImage='linear-gradient(135deg,rgba(24,70,105,.95),rgba(17,28,42,.98))'}else applyWallpaper(null)});
 window.addEventListener('resize',()=>{if(innerWidth>760){$('sidebar').classList.remove('hidden');$('chatPane').classList.remove('open')}});
 window.addEventListener('beforeunload',()=>{try{state.ws?.close()}catch{}});
-async function boot(){try{await loadMe();setTheme(state.theme);applyClientPrefs();showApp();await loadChats();connectWS()}catch(e){showAuth()}}
+async function boot(){try{await loadMe();setTheme(state.theme);applyClientPrefs();showApp();await loadChats();connectWS();if(state.notificationEnabled&&'Notification' in window&&Notification.permission==='default'){setTimeout(()=>requestNotificationPermission(),700)}}catch(e){showAuth()}}
 setAuthMode('login');setTheme(state.theme);applyClientPrefs();
 if(state.token)boot();else showAuth();
 </script>
