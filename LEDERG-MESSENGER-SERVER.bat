@@ -45,7 +45,7 @@ if errorlevel 1 (
         exit /b 1
     )
 
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop';$a=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""C:\LEDERG-MESSENGER-BOOT\supervisor.ps1""';$t=New-ScheduledTaskTrigger -AtStartup;$s=New-ScheduledTaskSettingsSet -Hidden -StartWhenAvailable -RestartCount 50 -RestartInterval (New-TimeSpan -Minutes 1);$p=New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest;$task=New-ScheduledTask -Action $a -Trigger $t -Settings $s -Principal $p;Register-ScheduledTask -TaskName 'LEDERG-AUTOPILOT' -InputObject $task -Force | Out-Null"
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop';$a=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""C:\LEDERG-MESSENGER-BOOT\supervisor.ps1""';$t=New-ScheduledTaskTrigger -AtStartup;$s=New-ScheduledTaskSettingsSet -Hidden -StartWhenAvailable -RestartCount 50 -RestartInterval (New-TimeSpan -Minutes 1);$p=New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest;$task=New-ScheduledTask -Action $a -Trigger $t -Settings $s -Principal $p -MultipleInstances IgnoreNew;Register-ScheduledTask -TaskName 'LEDERG-AUTOPILOT' -InputObject $task -Force | Out-Null"
     if errorlevel 1 (
         echo [LEDERG] Could not create Windows autopilot task.
         pause
