@@ -100,17 +100,22 @@ async def create_chat(data: ChatCreate, me=Depends(current_user)):
                 raise HTTPException(404, "User not found")
 
             # Reuse an existing 1:1 chat instead of creating duplicates.
-            direct_chat = db.scalar(
-                select(Chat.id)
+            direct_chats = db.scalars(
+                select(Chat)
                 .join(ChatMember, ChatMember.chat_id == Chat.id)
                 .where(Chat.is_group.is_(False), ChatMember.user_id == me["id"])
-            )
-            if direct_chat:
+            ).all()
+            for direct_chat in direct_chats:
                 member_ids = db.scalars(
-                    select(ChatMember.user_id).where(ChatMember.chat_id == direct_chat)
+                    select(ChatMember.user_id).where(ChatMember.chat_id == direct_chat.id)
                 ).all()
                 if set(member_ids) == {me["id"], data.user_id}:
-                    return {"id": direct_chat, "title": target.display_name, "is_group": False, "existing": True}
+                    return {
+                        "id": direct_chat.id,
+                        "title": target.display_name,
+                        "is_group": False,
+                        "existing": True,
+                    }
 
         chat = Chat(
             title=data.title.strip() if data.title else None,
