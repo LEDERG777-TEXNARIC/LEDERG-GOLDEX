@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     data_dir: str = os.getenv("LEDERG_DATA_DIR", str(DATA_DIR))
     db_path: str = os.getenv("LEDERG_DB_PATH", str(DATA_DIR / "lederg.db"))
     token_minutes: int = int(os.getenv("LEDERG_TOKEN_MINUTES", "10080"))
+    stun_url: str = os.getenv("LEDERG_STUN_URL", "stun:stun.cloudflare.com:3478")
+    turn_url: str = os.getenv("LEDERG_TURN_URL", "")
+    turn_username: str = os.getenv("LEDERG_TURN_USERNAME", "")
+    turn_credential: str = os.getenv("LEDERG_TURN_CREDENTIAL", "")
 
     model_config = SettingsConfigDict(env_prefix="LEDERG_", extra="ignore")
 
