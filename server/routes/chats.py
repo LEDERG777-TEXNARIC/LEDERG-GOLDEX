@@ -281,6 +281,21 @@ async def set_wallpaper(chat_id: int, wallpaper: UploadFile = File(...), me=Depe
             pass
     return {"ok": True, "wallpaper_url": f"/media/{rel}"}
 
+
+@router.get("/chats/{chat_id}/call-permission")
+def call_permission(chat_id: int, me=Depends(current_user)):
+    with SessionLocal() as db:
+        if not is_member(db, chat_id, me["id"]):
+            raise HTTPException(403, "Not a chat member")
+        members = db.scalars(select(ChatMember.user_id).where(ChatMember.chat_id == chat_id)).all()
+        other_id = next((uid for uid in members if uid != me["id"]), None)
+        if other_id is None:
+            raise HTTPException(400, "Call is only available in a private chat")
+        peer = db.get(User, other_id)
+        if not peer or not peer.allow_calls:
+            return {"allowed": False, "reason": "The user does not accept calls"}
+        return {"allowed": True, "user_id": other_id}
+
 @router.post("/chats/{chat_id}/mute")
 def set_mute(chat_id: int, muted: bool = Query(...), me=Depends(current_user)):
     with SessionLocal() as db:
