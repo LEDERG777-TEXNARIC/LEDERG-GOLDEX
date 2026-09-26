@@ -204,8 +204,9 @@ def refresh(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)):
 
         session.last_seen_at = datetime.now(timezone.utc)
         db.commit()
+        ttl = settings.token_minutes if session.remembered else min(settings.token_minutes, 720)
         return {
-            "access_token": make_token(user_id, sid),
+            "access_token": make_token(user_id, sid, ttl),
             "remembered": bool(session.remembered),
             "device_name": session.device_name or "LEDERG device",
         }
