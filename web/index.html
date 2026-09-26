@@ -329,16 +329,74 @@ function applyClientPrefs(){
  document.documentElement.style.setProperty('--msg-size',state.textSize+'px');
  document.body.classList.toggle('no-animations',!state.animations);
 }
-function api(path,options={}){
+async function rawFetch(path,options={},token=state.token){
  const headers={...(options.headers||{})};
  if(!(options.body instanceof FormData))headers['Content-Type']='application/json';
- if(state.token)headers.Authorization='Bearer '+state.token;
- return fetch(path,{...options,headers}).then(async r=>{
-   const data=await r.json().catch(()=>({}));
-   if(r.status===401){logout();throw new Error(data.detail||'Сессия истекла')}
-   if(!r.ok)throw new Error(typeof data.detail==='string'?data.detail:'Ошибка сервера');
-   return data
- })
+ if(token)headers.Authorization='Bearer '+token;
+ try{return await fetch(path,{...options,headers})}
+ catch{const e=new Error('Сервер недоступен. Проверь соединение с LEDERG и попробуй ещё раз.');e.code='NETWORK';throw e}
+}
+function formatServerError(data,status){
+ const detail=data?.detail;
+ if(typeof detail==='string'&&detail.trim())return detail;
+ if(detail?.message)return String(detail.message);
+ if(Array.isArray(detail)&&detail.length){
+  const first=detail[0]||{};
+  const loc=(first.loc||[]).filter(x=>x!=='body'&&x!=='query').join('.');
+  let msg=String(first.msg||'Проверь введённые данные');
+  const names={username:'Никнейм',password:'Пароль',display_name:'Имя',otp_code:'Код 2FA'};
+  if(msg.toLowerCase().includes('at least'))msg='слишком короткое значение';
+  if(msg.toLowerCase().includes('at most'))msg='слишком длинное значение';
+  return (names[loc]||loc||'Поле')+': '+msg;
+ }
+ if(status===401)return 'Сессия истекла или была завершена.';
+ if(status===409)return 'Такой никнейм уже занят.';
+ if(status>=500)return 'Сервер временно не смог обработать запрос. Попробуй ещё раз.';
+ return 'Не удалось выполнить запрос.';
+}
+function parseJwtExp(token){
+ try{
+  const payload=JSON.parse(atob(token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
+  return Number(payload.exp)*1000;
+ }catch{return 0}
+}
+function scheduleTokenRefresh(){
+ clearTimeout(state.refreshTimer);
+ if(!state.token)return;
+ const exp=parseJwtExp(state.token);
+ if(!exp)return;
+ const delay=Math.max(60000,exp-Date.now()-24*60*60*1000);
+ state.refreshTimer=setTimeout(()=>refreshSession().catch(()=>{}),delay);
+}
+async function refreshSession(){
+ if(!state.token)return false;
+ try{
+  const r=await rawFetch('/api/auth/refresh',{method:'POST'},state.token);
+  const data=await r.json().catch(()=>({}));
+  if(!r.ok||!data.access_token)return false;
+  state.token=data.access_token;
+  localStorage.setItem('lederg_token',state.token);
+  scheduleTokenRefresh();
+  return true;
+ }catch{return false}
+}
+async function api(path,options={},allowRefresh=true){
+ let r=await rawFetch(path,options,state.token);
+ let data=await r.json().catch(()=>({}));
+ if(r.status===401&&allowRefresh&&state.token&&!path.startsWith('/api/auth/refresh')){
+  if(await refreshSession()){
+   r=await rawFetch(path,options,state.token);
+   data=await r.json().catch(()=>({}));
+  }
+ }
+ if(r.status===401){
+  logout(false);
+  const e=new Error(formatServerError(data,r.status));
+  e.code='AUTH';
+  throw e;
+ }
+ if(!r.ok)throw new Error(formatServerError(data,r.status));
+ return data;
 }
 function showAuth(){$('auth').style.display='grid';$('app').style.display='none'}
 function showApp(){$('auth').style.display='none';$('app').style.display='grid'}
