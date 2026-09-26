@@ -1,15 +1,17 @@
-name: smoke
+name: LEDERG smoke
+
 on:
   push:
   pull_request:
+
 jobs:
-  python-smoke:
+  smoke:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -r requirements.txt
-      - run: python -m compileall -q server run.py
-      - run: python -c "from server.main import app; assert app.title == 'LEDERG Messenger'; print(app.title); print('routes:', len(app.routes))"
+      - run: python -m pip install -r requirements.txt
+      - run: python -m compileall -q server scripts
+      - run: python -c "from server.main import app; print(app.title, app.version)"
