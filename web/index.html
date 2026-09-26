@@ -765,7 +765,7 @@ function renderSettings(section){
 }
 async function loadSessions(){
  const box=$('sessionsBox');if(!box)return;
- try{const rows=await api('/api/users/sessions/list');box.innerHTML=rows.map(s=>'<div class="session"><div class="session-main"><div><b>'+(s.current?'Это устройство':'Другая сессия')+'</b><div><small>Создана: '+new Date(s.created_at).toLocaleString()+'<br>Активна: '+new Date(s.last_seen_at).toLocaleString()+'</small></div></div>'+(s.current?'':('<button class="danger revoke-session" data-id="'+escapeHtml(s.id)+'">Завершить</button>'))+'</div></div>').join('')||'<div class="empty">Сессий нет.</div>';document.querySelectorAll('.revoke-session').forEach(b=>b.onclick=async()=>{await api('/api/users/sessions/'+encodeURIComponent(b.dataset.id),{method:'DELETE'});loadSessions()})}catch(e){box.textContent=e.message}
+ try{const rows=await api('/api/users/sessions/list');box.innerHTML=rows.map(s=>'<div class="session"><div class="session-main"><div><b>'+escapeHtml(s.device_name||'LEDERG device')+'</b><div class="preview">'+(s.current?'Это текущее устройство':'Другое устройство')+(s.remembered?' · запомнено':' · временная сессия')+'</div><div><small>Создана: '+new Date(s.created_at).toLocaleString()+'<br>Активна: '+new Date(s.last_seen_at).toLocaleString()+'</small></div></div>'+(s.current?'':('<button class="danger revoke-session" data-id="'+escapeHtml(s.id)+'">Завершить</button>'))+'</div></div>').join('')||'<div class="empty">Сессий нет.</div>';document.querySelectorAll('.revoke-session').forEach(b=>b.onclick=async()=>{await api('/api/users/sessions/'+encodeURIComponent(b.dataset.id),{method:'DELETE'});loadSessions()})}catch(e){box.textContent=e.message}
 }
 async function loadBlocks(){
  const box=$('blockedBox');if(!box)return;
