@@ -3,7 +3,7 @@ on:
   push:
   pull_request:
 jobs:
-  python-import:
+  python-smoke:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -11,4 +11,5 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt
-      - run: python -c "from server.main import app; print(app.title)"
+      - run: python -m compileall -q server run.py
+      - run: python -c "from server.main import app; assert app.title == 'LEDERG Messenger'; print(app.title); print('routes:', len(app.routes))"
