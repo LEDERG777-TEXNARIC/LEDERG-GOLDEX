@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from server.auth import bearer, create_session, hash_password, make_token, verify_password
+from server.auth import _auth_candidates, bearer, create_session, hash_password, make_token, verify_password
 from server.config import settings
 from server.db.session import SessionLocal
 from server.models import Session, User
@@ -215,14 +215,15 @@ def login(data: LoginIn, request: Request, response: Response):
 
     _, token = create_session(
         user_id,
-        remembered=data.remember_device,
+        remembered=True,
         device_name=detect_device(request),
     )
-    _set_auth_cookie(response, token, data.remember_device, request)
+    _set_auth_cookie(response, token, True, request)
+    _auth_log("LOGIN", user_id=user_id, remembered=True, device=detect_device(request), scheme=request.url.scheme)
     return {
         "access_token": token,
         "user": payload,
-        "remembered": data.remember_device,
+        "remembered": True,
     }
 
 
