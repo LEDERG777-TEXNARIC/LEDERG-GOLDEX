@@ -114,6 +114,7 @@ def current_user(
                 if not user or not user.is_active:
                     last_error = "User unavailable"
                     continue
+                print(f"[AUTH] API_OK source={source} user_id={uid} session=active")
                 return {
                     "id": user.id,
                     "username": user.username,
