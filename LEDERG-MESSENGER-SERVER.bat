@@ -175,7 +175,7 @@ exit /b 0
 :DB_GUARD
 cd /d "%APP_DIR%"
 echo [DB] Fast database health check...
-"%PYTHON%" "%APP_DIR%\scripts\db_maintenance.py" --no-backup --fast
+"%PYTHON%" -m server.db_guard --no-backup --fast
 if errorlevel 20 exit /b 20
 if errorlevel 1 exit /b 1
 echo [DB] Health OK.
@@ -184,7 +184,7 @@ exit /b 0
 :DB_REPAIR
 cd /d "%APP_DIR%"
 echo [DB] Starting automatic database repair...
-"%PYTHON%" "%APP_DIR%\scripts\db_maintenance.py" --repair
+"%PYTHON%" -m server.db_guard --repair
 if errorlevel 1 (
     echo [DB] Automatic repair FAILED.
     exit /b 1
