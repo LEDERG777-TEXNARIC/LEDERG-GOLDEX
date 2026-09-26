@@ -28,6 +28,37 @@ async def broadcast_to_users(user_ids, payload: dict):
     for uid in {int(x) for x in user_ids}:
         await send_user(uid, payload)
 
+async def relay_call_event(uid: int, data: dict):
+    try:
+        chat_id = int(data.get("chat_id"))
+    except (TypeError, ValueError):
+        return
+
+    with SessionLocal() as db:
+        member_ids = db.scalars(
+            select(ChatMember.user_id).where(ChatMember.chat_id == chat_id)
+        ).all()
+        if uid not in member_ids or len(member_ids) < 2:
+            return
+        peer_ids = [int(x) for x in member_ids if int(x) != int(uid)]
+        peers = db.scalars(select(User).where(User.id.in_(peer_ids), User.is_active.is_(True))).all()
+        if not any(bool(p.allow_calls) for p in peers):
+            return
+
+    call_type = data.get("type")
+    if call_type not in {"call_invite","call_offer","call_answer","call_ice","call_end","call_reject"}:
+        return
+    event = {
+        "type": call_type,
+        "chat_id": chat_id,
+        "from_user_id": uid,
+    }
+    for key in ("call_id","mode","description","candidate","reason"):
+        if key in data:
+            event[key] = data[key]
+    await broadcast_to_users(peer_ids, event)
+
+
 def chat_member_ids(user_id: int):
     with SessionLocal() as db:
         chat_ids = db.scalars(
@@ -103,6 +134,10 @@ async def websocket(ws: WebSocket):
 
             if event_type == "ping":
                 await ws.send_json({"type": "pong"})
+                continue
+
+            if event_type in {"call_invite","call_offer","call_answer","call_ice","call_end","call_reject"}:
+                await relay_call_event(uid, data)
                 continue
 
             if event_type in {"typing", "read"}:
