@@ -25,5 +25,5 @@ if errorlevel 1 (
     move /Y "%TMP%" "%RUNNER%" >nul
 )
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%RUNNER%"
-exit /b %errorlevel%
+start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%RUNNER%"
+exit /b 0
