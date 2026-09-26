@@ -1,4 +1,4 @@
-# LEDERG permanent supervisor
+# LEDERG permanent background supervisor
 $ErrorActionPreference = "Stop"
 
 $BootDir = "C:\LEDERG-MESSENGER-BOOT"
@@ -20,42 +20,26 @@ function Write-Log([string]$Message) {
 $mutex = New-Object System.Threading.Mutex($false,$MutexName)
 if (-not $mutex.WaitOne(0)) { exit 0 }
 
-function Refresh-Runner {
-    try {
-        $content = (Invoke-WebRequest -UseBasicParsing -Uri $Raw -TimeoutSec 20).Content
-        if ([string]::IsNullOrWhiteSpace($content)) { throw "empty runner" }
-
-        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-        [IO.File]::WriteAllText($Tmp,$content,$utf8NoBom)
-
-        if (-not (Test-Path $Runner) -or (Get-FileHash $Tmp).Hash -ne (Get-FileHash $Runner).Hash) {
-            Move-Item $Tmp $Runner -Force
-            Write-Log "Autopilot runner refreshed from GitHub."
-        } else {
-            Remove-Item $Tmp -Force -ErrorAction SilentlyContinue
-        }
-        return $true
-    } catch {
-        Remove-Item $Tmp -Force -ErrorAction SilentlyContinue
-        Write-Log "GitHub runner refresh failed: $($_.Exception.Message)"
-        return (Test-Path $Runner)
-    }
-}
-
 try {
     while ($true) {
         try {
-            if (Refresh-Runner) {
-                & powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File $Runner -Once
-                if ($LASTEXITCODE -ne 0) {
-                    Write-Log "Autopilot returned exit code $LASTEXITCODE."
-                }
-            } else {
-                Write-Log "No cached autopilot runner available."
+            $content = (Invoke-WebRequest -UseBasicParsing -Uri $Raw -TimeoutSec 20).Content
+            if ([string]::IsNullOrWhiteSpace($content)) { throw "empty autopilot" }
+
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [IO.File]::WriteAllText($Tmp,$content,$utf8NoBom)
+            Move-Item $Tmp $Runner -Force
+            Write-Log "Autopilot code refreshed from GitHub."
+
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File $Runner -Once
+            if ($LASTEXITCODE -ne 0) {
+                Write-Log "Autopilot cycle returned exit code $LASTEXITCODE."
             }
         } catch {
+            Remove-Item $Tmp -Force -ErrorAction SilentlyContinue
             Write-Log "Supervisor cycle failed: $($_.Exception.Message)"
         }
+
         Start-Sleep -Seconds 60
     }
 } finally {
