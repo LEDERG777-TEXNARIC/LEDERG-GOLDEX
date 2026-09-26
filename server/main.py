@@ -1,4 +1,6 @@
 from contextlib import asynccontextmanager
+import asyncio
+import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -7,19 +9,53 @@ from sqlalchemy import text
 
 from server.config import settings
 from server.db.session import init_db, SessionLocal
+from server.db_guard import guard_database
 from server.routes.auth import router as auth_router
 from server.routes.users import router as users_router
 from server.routes.chats import router as chats_router
 from server.routes.ws import router as ws_router
 from server.routes.calls import router as calls_router
 
+async def _database_watchdog():
+    while True:
+        await asyncio.sleep(60)
+        try:
+            ok, messages = await asyncio.to_thread(guard_database, True)
+            if ok:
+                if messages:
+                    print("[DB-WATCH] " + " | ".join(messages))
+                continue
+            print("[DB-WATCH] CRITICAL: " + " | ".join(messages))
+            print("[DB-WATCH] Restarting so the autopilot can repair the database.")
+            if os.getenv("LEDERG_AUTOPILOT") == "1":
+                os._exit(78)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            print("[DB-WATCH] error:", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings.ensure_dirs()
     for folder in ("avatars", "wallpapers"):
         (Path(settings.data_dir) / "uploads" / folder).mkdir(parents=True, exist_ok=True)
-    init_db()
-    yield
+
+    ok, messages = guard_database(True)
+    if not ok:
+        raise RuntimeError("[DB-WATCH] database is not healthy: " + " | ".join(messages))
+    if messages:
+        print("[DB-WATCH] " + " | ".join(messages))
+
+    watcher = asyncio.create_task(_database_watchdog())
+    try:
+        yield
+    finally:
+        watcher.cancel()
+        try:
+            await watcher
+        except asyncio.CancelledError:
+            pass
 
 app = FastAPI(title="LEDERG Messenger", version="0.4.0", lifespan=lifespan)
 
@@ -30,6 +66,16 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+
+@app.middleware("http")
+async def no_cache_web_client(request, call_next):
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.endswith(".html"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 app.include_router(auth_router, prefix="/api/auth")
 app.include_router(users_router, prefix="/api/users")
