@@ -12,6 +12,7 @@
 }
 *{box-sizing:border-box}
 html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:Inter,Segoe UI,Arial,sans-serif}
+.no-animations *{transition:none!important;animation:none!important}
 button,input,textarea,select{font:inherit}
 button{border:0;cursor:pointer;color:inherit}
 body.light{--bg:#edf2f7;--panel:#fff;--panel2:#f3f6fa;--line:#d8e0e8;--text:#17202b;--muted:#657180;--bubble:#d7ebff;--bubble2:#fff;--shadow:0 18px 50px rgba(40,60,80,.15)}
@@ -65,7 +66,7 @@ body.light .chat-head{background:rgba(255,255,255,.88)}
 .msg{max-width:min(70%,720px);padding:9px 12px;border-radius:17px;background:var(--bubble2);align-self:flex-start;box-shadow:0 1px 0 rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.03)}
 .msg.mine{align-self:flex-end;background:var(--bubble)}
 .msg-author{font-size:11px;color:#72afff;margin-bottom:4px}
-.msg-text{white-space:pre-wrap;word-break:break-word}
+.msg-text{white-space:pre-wrap;word-break:break-word;font-size:var(--msg-size,16px)}
 .msg-meta{text-align:right;color:var(--muted);font-size:10px;margin-top:4px}
 .composer{padding:14px 16px;border-top:1px solid var(--line);display:flex;gap:10px;background:var(--panel)}
 .composer input{flex:1;padding:13px 14px;border-radius:14px;border:1px solid var(--line);background:var(--panel2);color:var(--text);outline:none}
@@ -127,6 +128,7 @@ body.light .settings-nav button.active{color:var(--text)}
       <input id="username" class="field" autocomplete="username" placeholder="Никнейм" required>
       <input id="displayName" class="field" autocomplete="name" placeholder="Имя" style="display:none">
       <input id="password" class="field" type="password" autocomplete="current-password" placeholder="Пароль" required>
+      <input id="otpCode" class="field" inputmode="numeric" autocomplete="one-time-code" placeholder="Код 2FA" maxlength="8" style="display:none">
       <button class="primary" id="authButton">Войти</button>
       <div id="authError" class="error"></div>
     </form>
@@ -210,6 +212,13 @@ body.light .settings-nav button.active{color:var(--text)}
     </div>
    </div>
    <div class="setting-section">
+    <div class="setting-title">Чат</div>
+    <div class="settings-actions">
+      <button id="muteChatBtn" class="secondary">Без звука</button>
+      <button id="blockChatUserBtn" class="danger">Заблокировать пользователя</button>
+    </div>
+   </div>
+   <div class="setting-section">
     <div class="setting-title">Быстрые варианты</div>
     <div class="settings-actions">
       <button class="secondary quick-wall" data-wall="">Без фона</button>
@@ -233,7 +242,11 @@ const state={
  typingTimer:null,
  notificationEnabled:localStorage.getItem('lederg_notify')==='1',
  theme:localStorage.getItem('lederg_theme')||'dark',
- activeSettings:'profile'
+ activeSettings:'profile',
+ requires2fa:false,
+ textSize:localStorage.getItem('lederg_text_size')||'16',
+ animations:localStorage.getItem('lederg_animations')!=='0',
+ sendByEnter:localStorage.getItem('lederg_send_enter')!=='0'
 };
 const $=id=>document.getElementById(id);
 
@@ -262,6 +275,7 @@ function setAuthMode(mode){
  $('displayName').style.display=mode==='register'?'block':'none';
  $('authButton').textContent=mode==='register'?'Создать аккаунт':'Войти';
  $('authError').textContent='';
+ state.requires2fa=false;$('otpCode').style.display='none';$('otpCode').value='';
 }
 function applyMyProfile(){
  const u=state.user;
@@ -423,9 +437,14 @@ function renderSettings(section){
    return;
  }
  if(section==='appearance'){
-   c.innerHTML='<div class="setting-section"><div class="setting-title">Оформление</div><div class="settings-row"><div><div>Тема</div><div class="desc">Тёмная или светлая оболочка.</div></div><select id="themeSelect" class="settings-select" style="max-width:180px"><option value="dark">Тёмная</option><option value="light">Светлая</option></select></div></div><div class="notice">Фон конкретного личного чата меняется отдельно через ⚙ в шапке чата.</div>';
+   c.innerHTML='<div class="setting-section"><div class="setting-title">Оформление</div><div class="settings-row"><div><div>Тема</div><div class="desc">Тёмная или светлая оболочка.</div></div><select id="themeSelect" class="settings-select" style="max-width:180px"><option value="dark">Тёмная</option><option value="light">Светлая</option></select></div><div class="settings-row"><div><div>Размер текста</div><div class="desc">Размер текста сообщений.</div></div><input id="textSize" type="range" min="13" max="22" step="1" value="'+escapeHtml(state.textSize)+'"></div>'+settingToggle('setAnimations','Анимации','Включить плавные переходы интерфейса.',state.animations)+settingToggle('setSendEnter','Отправлять Enter','Enter отправляет сообщение, Shift+Enter — новая строка.',state.sendByEnter)+'</div><div class="notice">Фон конкретного личного чата меняется отдельно через ⚙ в шапке.</div>';
    $('themeSelect').value=state.theme;$('themeSelect').onchange=e=>setTheme(e.target.value);
+   $('textSize').oninput=e=>{state.textSize=e.target.value;localStorage.setItem('lederg_text_size',state.textSize);applyClientPrefs()};
+   $('setAnimations').onclick=()=>{toggleEl($('setAnimations'));state.animations=$('setAnimations').dataset.on==='1';localStorage.setItem('lederg_animations',state.animations?'1':'0');applyClientPrefs()};
+   $('setSendEnter').onclick=()=>{toggleEl($('setSendEnter'));state.sendByEnter=$('setSendEnter').dataset.on==='1';localStorage.setItem('lederg_send_enter',state.sendByEnter)};
    return;
+ }
+ if(section==='notifications')   return;
  }
  if(section==='notifications'){
    c.innerHTML='<div class="setting-section"><div class="setting-title">Уведомления</div>'+settingToggle('setNotify','Браузерные уведомления','Показывать новые сообщения, когда вкладка скрыта.',state.notificationEnabled)+'</div>';
@@ -433,20 +452,57 @@ function renderSettings(section){
    return;
  }
  if(section==='security'){
-   c.innerHTML='<div class="setting-section"><div class="setting-title">Пароль</div><input id="oldPassword" class="settings-input" type="password" placeholder="Текущий пароль" style="margin-bottom:8px"><input id="newPassword" class="settings-input" type="password" placeholder="Новый пароль (8+)" style="margin-bottom:8px"><button id="changePassword" class="primary" style="width:auto">Сменить пароль</button><div id="passwordStatus" class="preview" style="margin-top:8px"></div></div><div class="setting-section"><div class="setting-title">Активные сессии</div><div id="sessionsBox">Загрузка…</div><div class="settings-actions"><button id="revokeAll" class="danger">Завершить все сессии</button></div></div><div class="notice">Для чувствительных переписок серверная модель LEDERG пока не является полной end-to-end encrypted системой: сервер технически видит текст сообщений. Здесь уже усилены контроль доступа, сессии, отсутствие IP-логирования приложения и проверка БД.</div>';
+   c.innerHTML='<div class="setting-section"><div class="setting-title">Пароль</div><input id="oldPassword" class="settings-input" type="password" placeholder="Текущий пароль" style="margin-bottom:8px"><input id="newPassword" class="settings-input" type="password" placeholder="Новый пароль (8+)" style="margin-bottom:8px"><button id="changePassword" class="primary" style="width:auto">Сменить пароль</button><div id="passwordStatus" class="preview" style="margin-top:8px"></div></div><div class="setting-section"><div class="setting-title">Двухэтапная проверка</div><div id="twoFaBox"></div></div><div class="setting-section"><div class="setting-title">Активные сессии</div><div id="sessionsBox">Загрузка…</div><div class="settings-actions"><button id="revokeAll" class="danger">Завершить все сессии</button></div></div><div class="notice">Двухэтапная проверка использует TOTP-код из приложения-аутентификатора. Для настоящей E2EE-защиты личных сообщений нужен отдельный криптографический протокол с ключами устройств — сейчас сервер технически видит текст сообщений.</div>';
    $('changePassword').onclick=async()=>{const st=$('passwordStatus');try{await api('/api/users/password',{method:'POST',body:JSON.stringify({old_password:$('oldPassword').value,new_password:$('newPassword').value})});st.textContent='Пароль изменён. Остальные сессии завершены.';loadSessions()}catch(e){st.textContent=e.message}};
    $('revokeAll').onclick=async()=>{await api('/api/users/sessions/revoke-all',{method:'POST'});logout()};
+   render2FA();
    loadSessions();
+ }
+
  }
 }
 async function loadSessions(){
  const box=$('sessionsBox');if(!box)return;
  try{const rows=await api('/api/users/sessions/list');box.innerHTML=rows.map(s=>'<div class="session"><div class="session-main"><div><b>'+(s.current?'Это устройство':'Другая сессия')+'</b><div><small>Создана: '+new Date(s.created_at).toLocaleString()+'<br>Активна: '+new Date(s.last_seen_at).toLocaleString()+'</small></div></div>'+(s.current?'':('<button class="danger revoke-session" data-id="'+escapeHtml(s.id)+'">Завершить</button>'))+'</div></div>').join('')||'<div class="empty">Сессий нет.</div>';document.querySelectorAll('.revoke-session').forEach(b=>b.onclick=async()=>{await api('/api/users/sessions/'+encodeURIComponent(b.dataset.id),{method:'DELETE'});loadSessions()})}catch(e){box.textContent=e.message}
 }
+async function loadBlocks(){
+ const box=$('blockedBox');if(!box)return;
+ try{
+  const rows=await api('/api/users/blocks');
+  box.innerHTML=rows.length?rows.map(u=>'<div class="session"><div class="session-main"><div><b>'+escapeHtml(u.display_name)+'</b><div><small>@'+escapeHtml(u.username)+'</small></div></div><button class="danger unblock-user" data-id="'+u.id+'">Разблокировать</button></div></div>').join(''):'<div class="empty">Заблокированных пользователей нет.</div>';
+  document.querySelectorAll('.unblock-user').forEach(b=>b.onclick=async()=>{await api('/api/users/blocks/'+b.dataset.id,{method:'DELETE'});loadBlocks()});
+ }catch(e){box.textContent=e.message}
+}
+async function blockUser(userId){
+ await api('/api/users/blocks',{method:'POST',body:JSON.stringify({user_id:Number(userId)})});
+}
+async function render2FA(){
+ const box=$('twoFaBox');if(!box)return;
+ if(state.user.two_factor_enabled){
+  box.innerHTML='<div class="notice" style="margin-bottom:10px">Двухэтапная проверка включена.</div><div class="settings-actions"><button id="disable2fa" class="danger">Отключить 2FA</button></div>';
+  $('disable2fa').onclick=async()=>{const p=prompt('Текущий пароль:');const code=prompt('Код из authenticator:');if(!p||!code)return;try{await api('/api/users/2fa/disable?code='+encodeURIComponent(code),{method:'POST',body:JSON.stringify({password:p})});await loadMe();renderSettings('security')}catch(e){alert(e.message)}};
+ }else{
+  box.innerHTML='<div class="notice">Для включения нужен пароль и приложение-аутентификатор.</div><div class="settings-actions"><button id="setup2fa" class="secondary">Настроить 2FA</button></div><div id="twoFaSetup"></div>';
+  $('setup2fa').onclick=async()=>{
+    const p=prompt('Введите текущий пароль:');if(!p)return;
+    try{
+      const d=await api('/api/users/2fa/setup',{method:'POST',body:JSON.stringify({password:p})});
+      $('twoFaSetup').innerHTML='<div class="profile-card" style="margin-top:10px"><div style="min-width:0"><b>Секрет</b><div class="preview" style="word-break:break-all">'+escapeHtml(d.secret)+'</div><div class="preview" style="word-break:break-all;margin-top:7px">'+escapeHtml(d.otpauth_uri)+'</div><input id="confirm2faCode" class="settings-input" inputmode="numeric" placeholder="Код из authenticator" style="margin-top:10px"><button id="confirm2fa" class="primary" style="width:auto;margin-top:8px">Подтвердить 2FA</button></div></div>';
+      $('confirm2fa').onclick=async()=>{try{await api('/api/users/2fa/confirm',{method:'POST',body:JSON.stringify({code:$('confirm2faCode').value})});await loadMe();renderSettings('security')}catch(e){alert(e.message)}};
+    }catch(e){alert(e.message)}
+  };
+ }
+}
 function openSettings(section=state.activeSettings){$('settingsModal').style.display='grid';renderSettings(section)}
 function closeSettings(){$('settingsModal').style.display='none'}
 async function loadChatWallpaper(chatId){
- try{const d=await api('/api/chats/'+chatId+'/settings');applyWallpaper(d.wallpaper_url)}catch{}
+ try{const d=await api('/api/chats/'+chatId+'/settings');applyWallpaper(d.wallpaper_url);setChatMuteUi(!!d.muted)}catch{}
+}
+function setChatMuteUi(muted){const b=$('muteChatBtn');if(b)b.textContent=muted?'Сообщения без звука':'Без звука'}
+async function toggleMute(){
+ if(!state.activeChat)return;
+ const b=$('muteChatBtn');const muted=b?.textContent!=='Сообщения без звука';
+ try{await api('/api/chats/'+state.activeChat.id+'/mute?muted='+muted,{method:'POST'});setChatMuteUi(muted)}catch(e){alert(e.message)}
 }
 function applyWallpaper(url){
  const box=$('messages');
@@ -469,11 +525,21 @@ $('authForm').onsubmit=async e=>{
  e.preventDefault();$('authError').textContent='';
  const body={username:$('username').value,password:$('password').value};
  if(state.authMode==='register')body.display_name=$('displayName').value;
+ if(state.requires2fa)body.otp_code=$('otpCode').value.trim();
  try{
-  const d=await api(state.authMode==='register'?'/api/auth/register':'/api/auth/login',{method:'POST',body:JSON.stringify(body)});
+  const r=await fetch(state.authMode==='register'?'/api/auth/register':'/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok){
+    if(d.detail?.requires_2fa){
+      state.requires2fa=true;$('otpCode').style.display='block';$('authButton').textContent='Подтвердить вход';$('authError').textContent=d.detail.message||'Введите код 2FA';$('otpCode').focus();return;
+    }
+    throw new Error(typeof d.detail==='string'?d.detail:'Ошибка сервера');
+  }
+  state.requires2fa=false;$('otpCode').style.display='none';$('authButton').textContent='Войти';
   state.token=d.access_token;localStorage.setItem('lederg_token',state.token);await boot();
  }catch(err){$('authError').textContent=err.message}
 };
+
 $('settingsBtn').onclick=()=>openSettings();
 $('settingsClose').onclick=closeSettings;
 $('settingsModal').onclick=e=>{if(e.target===$('settingsModal'))closeSettings()};
@@ -481,6 +547,7 @@ document.querySelectorAll('.settings-nav button').forEach(b=>b.onclick=()=>rende
 $('logout').onclick=logoutAndClose;
 $('searchInput').oninput=()=>{clearTimeout(state.searchTimer);state.searchTimer=setTimeout(()=>findUsers($('searchInput').value),180)};
 $('messageInput').oninput=()=>{if(state.activeChat)sendWS({type:'typing',chat_id:state.activeChat.id,is_typing:$('messageInput').value.length>0})};
+$('messageInput').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&state.sendByEnter){e.preventDefault();$('composer').requestSubmit()}};
 $('composer').onsubmit=async e=>{
  e.preventDefault();if(!state.activeChat)return;
  const input=$('messageInput');const textValue=input.value.trim();if(!textValue)return;input.value='';
@@ -494,11 +561,13 @@ $('chatSettingsClose').onclick=()=>{$('chatSettingsModal').style.display='none'}
 $('chatSettingsModal').onclick=e=>{if(e.target===$('chatSettingsModal'))$('chatSettingsModal').style.display='none'};
 $('wallpaperInput').onchange=e=>{const f=e.target.files[0];if(f)setWallpaper(f);e.target.value=''};
 $('wallpaperClear').onclick=clearWallpaper;
+$('muteChatBtn').onclick=toggleMute;
+$('blockChatUserBtn').onclick=async()=>{const uid=state.activeChat?.peer?.id;if(!uid)return;try{await blockUser(uid);alert('Пользователь заблокирован. Новые сообщения от него запрещены.');$('chatSettingsModal').style.display='none';}catch(e){alert(e.message)}};
 document.querySelectorAll('.quick-wall').forEach(b=>b.onclick=async()=>{if(b.dataset.wall==='gradient'){$('messages').style.backgroundImage='linear-gradient(135deg,rgba(24,70,105,.95),rgba(17,28,42,.98))'}else applyWallpaper(null)});
 window.addEventListener('resize',()=>{if(innerWidth>760){$('sidebar').classList.remove('hidden');$('chatPane').classList.remove('open')}});
 window.addEventListener('beforeunload',()=>{try{state.ws?.close()}catch{}});
-async function boot(){try{await loadMe();setTheme(state.theme);showApp();await loadChats();connectWS()}catch(e){showAuth()}}
-setAuthMode('login');setTheme(state.theme);
+async function boot(){try{await loadMe();setTheme(state.theme);applyClientPrefs();showApp();await loadChats();connectWS()}catch(e){showAuth()}}
+setAuthMode('login');setTheme(state.theme);applyClientPrefs();
 if(state.token)boot();else showAuth();
 </script>
 </body>
