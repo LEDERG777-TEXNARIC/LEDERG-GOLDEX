@@ -1,5 +1,5 @@
 from pathlib import Path
-from sqlalchemy import create_engine, event, inspect, text
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from server.config import settings
 
@@ -24,8 +24,12 @@ def sqlite_pragmas(dbapi_connection, connection_record):
     cur.execute("PRAGMA temp_store=MEMORY")
     cur.close()
 
+def _add_column_if_missing(conn, table, name, ddl):
+    cols = {row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info({table})").fetchall()}
+    if name not in cols:
+        conn.exec_driver_sql(ddl)
+
 def _add_missing_user_columns(conn):
-    existing = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(users)").fetchall()}
     additions = {
         "bio": "ALTER TABLE users ADD COLUMN bio VARCHAR(160) NOT NULL DEFAULT ''",
         "avatar_path": "ALTER TABLE users ADD COLUMN avatar_path VARCHAR(255)",
@@ -34,15 +38,21 @@ def _add_missing_user_columns(conn):
         "avatar_public": "ALTER TABLE users ADD COLUMN avatar_public BOOLEAN NOT NULL DEFAULT 1",
         "read_receipts": "ALTER TABLE users ADD COLUMN read_receipts BOOLEAN NOT NULL DEFAULT 1",
         "allow_messages": "ALTER TABLE users ADD COLUMN allow_messages BOOLEAN NOT NULL DEFAULT 1",
+        "two_factor_enabled": "ALTER TABLE users ADD COLUMN two_factor_enabled BOOLEAN NOT NULL DEFAULT 0",
+        "two_factor_secret": "ALTER TABLE users ADD COLUMN two_factor_secret VARCHAR(64)",
     }
     for name, sql in additions.items():
-        if name not in existing:
-            conn.exec_driver_sql(sql)
+        _add_column_if_missing(conn, "users", name, sql)
 
 def init_db():
-    from server.models import User, Session, Chat, ChatMember, ChatPreference, Message
+    from server.models import User, Session, Block, Chat, ChatMember, ChatPreference, Message
     Base.metadata.create_all(bind=engine)
     with engine.begin() as conn:
         _add_missing_user_columns(conn)
+        _add_column_if_missing(
+            conn, "chat_preferences", "muted",
+            "ALTER TABLE chat_preferences ADD COLUMN muted BOOLEAN NOT NULL DEFAULT 0"
+        )
         conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_users_discoverable_username ON users(discoverable, username)")
         conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_sessions_user_revoked ON sessions(user_id, revoked)")
+        conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_blocks_blocker_blocked ON blocks(blocker_id, blocked_id)")
