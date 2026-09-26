@@ -29,6 +29,7 @@ async def _database_watchdog():
                 guard_database,
                 do_deep_cycle,
                 do_deep_cycle,
+                do_deep_cycle,
             )
             if ok:
                 if messages:

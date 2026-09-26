@@ -154,7 +154,9 @@ def _backup_if_due(force: bool = False) -> Path | None:
     if not force and latest:
         age = time.time() - latest.stat().st_mtime
         if age < BACKUP_INTERVAL_SECONDS:
-            return latest
+            ok, _ = _integrity(latest, deep=False)
+            if ok:
+                return latest
     return _create_backup()
 
 
@@ -190,13 +192,18 @@ def _repair_from_backup() -> tuple[bool, str]:
     return False, "no verified backup available"
 
 
-def guard_database(create_backup: bool = True, deep: bool = True) -> tuple[bool, list[str]]:
+def guard_database(
+    create_backup: bool = True,
+    deep: bool = True,
+    normalize_schema: bool = True,
+) -> tuple[bool, list[str]]:
     settings.ensure_dirs()
 
-    try:
-        init_db()
-    except Exception as exc:
-        return False, [f"schema initialization failed: {exc}"]
+    if normalize_schema:
+        try:
+            init_db()
+        except Exception as exc:
+            return False, [f"schema initialization failed: {exc}"]
 
     ok, errors = _integrity(db_path(), deep=deep)
     if not ok:
@@ -273,6 +280,7 @@ def main(argv: list[str] | None = None) -> int:
     ok, messages = guard_database(
         create_backup=not args.no_backup,
         deep=not args.fast,
+        normalize_schema=not args.fast,
     )
     if ok:
         print("[DB] GUARD OK")
