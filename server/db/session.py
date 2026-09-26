@@ -54,6 +54,15 @@ def init_db():
             conn, "chat_preferences", "muted",
             "ALTER TABLE chat_preferences ADD COLUMN muted BOOLEAN NOT NULL DEFAULT 0"
         )
+        _add_column_if_missing(
+            conn, "sessions", "device_name",
+            "ALTER TABLE sessions ADD COLUMN device_name VARCHAR(120) NOT NULL DEFAULT 'LEDERG device'"
+        )
+        _add_column_if_missing(
+            conn, "sessions", "remembered",
+            "ALTER TABLE sessions ADD COLUMN remembered BOOLEAN NOT NULL DEFAULT 1"
+        )
         conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_users_discoverable_username ON users(discoverable, username)")
         conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_sessions_user_revoked ON sessions(user_id, revoked)")
+        conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_sessions_user_remembered ON sessions(user_id, remembered)")
         conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_blocks_blocker_blocked ON blocks(blocker_id, blocked_id)")
