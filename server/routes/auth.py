@@ -172,7 +172,10 @@ def login(data: LoginIn, request: Request):
 
 
 @router.post("/refresh")
-def refresh(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)):
+def refresh(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+):
     if not credentials:
         raise HTTPException(401, "Нужна активная сессия")
     try:
@@ -187,8 +190,27 @@ def refresh(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)):
     except Exception:
         raise HTTPException(401, "Сессия недействительна")
 
+    # Legacy JWTs created before server-side sessions had no sid.
+    # Migrate an unexpired legacy token once, instead of throwing the user out.
     if not sid:
-        raise HTTPException(401, "Старая сессия не поддерживается")
+        exp = payload.get("exp")
+        if not exp or float(exp) <= datetime.now(timezone.utc).timestamp():
+            raise HTTPException(401, "Старая сессия истекла")
+        with SessionLocal() as db:
+            user = db.get(User, user_id)
+            if not user or not user.is_active:
+                raise HTTPException(401, "Пользователь недоступен")
+        _, token = create_session(
+            user_id,
+            remembered=True,
+            device_name=detect_device(request),
+        )
+        return {
+            "access_token": token,
+            "remembered": True,
+            "device_name": detect_device(request),
+            "migrated": True,
+        }
 
     with SessionLocal() as db:
         session = db.get(Session, sid)
