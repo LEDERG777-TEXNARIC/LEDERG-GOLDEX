@@ -457,7 +457,7 @@ function connectWS(){
       addMessage(d.message,true);
       if(!isActive&&d.message.sender_id!==state.user.id&&state.notificationEnabled&&state.notificationPrivate&&document.hidden){playNotificationSound();if('Notification' in window&&Notification.permission==='granted'){
         new Notification(d.message.sender?.display_name||'LEDERG',{body:state.notificationPreview?(d.message.text||'Новое сообщение'):'Новое сообщение'});
-      }
+      }}
     }else if(d.type==='call_invite'){
  if(d.from_user_id===state.user.id)return;
  state.callState.chatId=d.chat_id;state.callState.callId=d.call_id;state.callState.mode=d.mode;state.callState.remoteUserId=d.from_user_id;
