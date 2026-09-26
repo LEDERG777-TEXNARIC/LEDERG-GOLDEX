@@ -6,18 +6,33 @@ from server.auth import current_user
 
 router = APIRouter()
 
+def public_user(user: User):
+    return {
+        "id": user.id,
+        "username": user.username,
+        "display_name": user.display_name,
+    }
+
 @router.get("/search")
 def search(q: str = Query(min_length=1, max_length=64), me=Depends(current_user)):
-    needle = f"%{q.lower()}%"
+    needle = f"%{q.strip().lower()}%"
+    if len(q.strip()) < 1:
+        return []
     with SessionLocal() as db:
         rows = db.scalars(
-            select(User).where(
-                User.is_active == True,
+            select(User)
+            .where(
+                User.is_active.is_(True),
                 User.id != me["id"],
-                or_(User.username.ilike(needle), User.display_name.ilike(needle))
-            ).limit(30)
+                or_(
+                    User.username.ilike(needle),
+                    User.display_name.ilike(needle),
+                ),
+            )
+            .order_by(User.username)
+            .limit(30)
         ).all()
-        return [{"id": u.id, "username": u.username, "display_name": u.display_name} for u in rows]
+        return [public_user(u) for u in rows]
 
 @router.get("/me")
 def me(user=Depends(current_user)):
