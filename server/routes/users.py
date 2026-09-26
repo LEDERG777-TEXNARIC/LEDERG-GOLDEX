@@ -53,6 +53,7 @@ def private_user(user: User):
         "avatar_public": user.avatar_public,
         "read_receipts": user.read_receipts,
         "allow_messages": user.allow_messages,
+        "allow_calls": user.allow_calls,
         "two_factor_enabled": user.two_factor_enabled,
     }
 
@@ -99,6 +100,7 @@ async def update_me(
     avatar_public: bool | None = Form(default=None),
     read_receipts: bool | None = Form(default=None),
     allow_messages: bool | None = Form(default=None),
+    allow_calls: bool | None = Form(default=None),
     remove_avatar: bool = Form(default=False),
     avatar: UploadFile | None = File(default=None),
     me=Depends(current_user),
@@ -153,6 +155,7 @@ async def update_me(
             ("avatar_public", avatar_public),
             ("read_receipts", read_receipts),
             ("allow_messages", allow_messages),
+            ("allow_calls", allow_calls),
         ):
             if value is not None:
                 setattr(obj, field, value)
@@ -290,6 +293,69 @@ def revoke_all_sessions(me=Depends(current_user)):
         db.execute(update(Session).where(Session.user_id==me["id"]).values(revoked=True))
         db.commit()
     return {"ok":True}
+
+
+
+@router.put("/me/avatar")
+async def update_avatar(avatar: UploadFile = File(...), me=Depends(current_user)):
+    ext = _image_ext(avatar)
+    if not ext:
+        raise HTTPException(415, "Use JPG, PNG or WEBP")
+    data = await avatar.read(MAX_AVATAR_BYTES + 1)
+    if len(data) > MAX_AVATAR_BYTES:
+        raise HTTPException(413, "Avatar is too large (max 5 MB)")
+    magic_ok = (
+        (ext == "jpg" and data[:3] == b"\xff\xd8\xff")
+        or (ext == "png" and data[:8] == b"\x89PNG\r\n\x1a\n")
+        or (ext == "webp" and data[:4] == b"RIFF" and data[8:12] == b"WEBP")
+    )
+    if not magic_ok:
+        raise HTTPException(415, "Invalid image file")
+    folder = Path(settings.data_dir) / "uploads" / "avatars"
+    folder.mkdir(parents=True, exist_ok=True)
+    filename = f"{me['id']}_{secrets.token_hex(12)}.{ext}"
+    path = folder / filename
+    path.write_bytes(data)
+
+    old = None
+    with SessionLocal() as db:
+        user = db.get(User, me["id"])
+        if not user:
+            raise HTTPException(404, "User not found")
+        old = user.avatar_path
+        user.avatar_path = f"uploads/avatars/{filename}"
+        db.commit()
+        db.refresh(user)
+        result = private_user(user)
+
+    if old:
+        try:
+            (Path(settings.data_dir) / old).unlink(missing_ok=True)
+        except OSError:
+            pass
+    await broadcast_presence(me["id"])
+    return result
+
+@router.delete("/me/avatar")
+def delete_avatar(me=Depends(current_user)):
+    old = None
+    with SessionLocal() as db:
+        user = db.get(User, me["id"])
+        if not user:
+            raise HTTPException(404, "User not found")
+        old = user.avatar_path
+        user.avatar_path = None
+        db.commit()
+        db.refresh(user)
+        result = private_user(user)
+
+    if old:
+        try:
+            (Path(settings.data_dir) / old).unlink(missing_ok=True)
+        except OSError:
+            pass
+    await broadcast_presence(me["id"])
+    return result
 
 @router.get("/{user_id}")
 def get_user(user_id: int, me=Depends(current_user)):
