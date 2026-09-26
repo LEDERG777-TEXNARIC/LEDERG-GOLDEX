@@ -95,8 +95,6 @@ def current_user(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
 ):
-    if not credentials:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authorization required")
     if not credentials and not request.cookies.get("lederg_auth"):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authorization required")
     last_error = "Authorization required"

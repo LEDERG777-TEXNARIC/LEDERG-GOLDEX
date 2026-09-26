@@ -45,6 +45,7 @@ powershell -NoProfile -Command "git -C '%APP_DIR%' remote set-url origin '%REPO_
 
 :MAIN
 echo.
+echo [ACTION] MAIN_CYCLE
 echo ============================================================
 echo [%DATE% %TIME%] SERVER CYCLE
 echo ============================================================
@@ -126,11 +127,14 @@ if errorlevel 2 (
 goto MONITOR
 
 :CHECK_REMOTE
+echo [ACTION] CHECK_REMOTE
 cd /d "%APP_DIR%"
 echo [GIT] Checking GitHub...
 
 git fetch origin "%BRANCH%" --prune
-if errorlevel 1 (
+set "GIT_FETCH_RC=!ERRORLEVEL!"
+echo [GIT] fetch exit code: !GIT_FETCH_RC!
+if not !GIT_FETCH_RC! EQU 0 (
     echo [GIT] Fetch failed.
     exit /b 1
 )
@@ -149,20 +153,27 @@ echo [GIT] Remote: !REMOTE_COMMIT!
 exit /b 2
 
 :APPLY_UPDATE
+echo.
+echo [ACTION] APPLY_UPDATE
 cd /d "%APP_DIR%"
 
 git reset --hard "origin/%BRANCH%"
-if errorlevel 1 (
+set "GIT_RESET_RC=!ERRORLEVEL!"
+echo [GIT] reset exit code: !GIT_RESET_RC!
+if not !GIT_RESET_RC! EQU 0 (
     echo [GIT] reset failed.
     exit /b 1
 )
 
 git clean -fd
+echo [GIT] clean exit code: !ERRORLEVEL!
 
 if exist "requirements.txt" (
     echo [PIP] Installing dependencies...
     "%PYTHON%" -m pip install -r "requirements.txt" --disable-pip-version-check
-    if errorlevel 1 (
+    set "PIP_RC=!ERRORLEVEL!"
+    echo [PIP] exit code: !PIP_RC!
+    if not !PIP_RC! EQU 0 (
         echo [PIP] Dependency installation failed.
         exit /b 1
     )
@@ -188,6 +199,8 @@ echo [DB] Health OK.
 exit /b 0
 
 :DB_REPAIR
+echo.
+echo [ACTION] DB_REPAIR
 cd /d "%APP_DIR%"
 echo [DB] Starting automatic database repair...
 "%PYTHON%" -m server.db_guard --repair
@@ -199,6 +212,7 @@ echo [DB] Automatic repair completed.
 exit /b 0
 
 :START_SERVER
+echo [ACTION] START_SERVER
 echo.
 echo [START] run.py -> %HOST%:%PORT%
 echo [LOGS] LIVE run.py stdout/stderr:
@@ -210,6 +224,7 @@ set "LEDERG_AUTOPILOT=1"
 set "SERVER_PID="
 
 start "" /B "%PYTHON%" -u "%APP_DIR%\run.py"
+echo [START] start command exit code: !ERRORLEVEL!
 
 for /l %%N in (1,1,10) do (
     timeout /t 1 /nobreak >nul
@@ -228,6 +243,7 @@ if defined SERVER_PID exit /b 0
 exit /b 1
 
 :GET_PORT_PID
+echo [ACTION] GET_PORT_PID
 set "SERVER_PID="
 for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":%PORT% " ^| findstr /I "LISTENING"') do (
     set "SERVER_PID=%%P"
@@ -237,6 +253,7 @@ for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":%PORT% " ^| findstr /
 exit /b 0
 
 :STOP_SERVER
+echo [ACTION] STOP_SERVER
 call :GET_PORT_PID
 if not defined SERVER_PID (
     echo [SERVER] No process on port %PORT%.
