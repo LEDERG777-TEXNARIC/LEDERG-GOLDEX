@@ -31,6 +31,8 @@ class Session(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    device_name: Mapped[str] = mapped_column(String(120), default="LEDERG device")
+    remembered: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     revoked: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
 class Block(Base):
