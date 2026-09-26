@@ -6,7 +6,10 @@ set "APP_DIR=C:\LEDERG-MESSENGER"
 set "DATA_DIR=C:\LEDERG-MESSENGER-DATA"
 set "BACKUP_DIR=C:\LEDERG-MESSENGER-DATA\backups"
 set "CHECK_SECONDS=60"
+set "LOG_FILE=C:\LEDERG-MESSENGER-DATA\logs\autopilot.log"
 set "PORT=8000"
+set "LEDERG_HOST=0.0.0.0"
+set "LEDERG_PORT=8000"
 set "APP_TASK=LEDERG-MESSENGER"
 
 if /I "%~1"=="install" goto INSTALL
@@ -52,6 +55,8 @@ exit /b 0
 (
 echo @echo off
 echo cd /d "%APP_DIR%"
+echo set "LEDERG_HOST=%LEDERG_HOST%"
+echo set "LEDERG_PORT=%LEDERG_PORT%"
 echo "%APP_DIR%\.venv\Scripts\python.exe" "%APP_DIR%\run.py" ^>^> "%DATA_DIR%\logs\server.log" 2^>^&1
 ) > "%DATA_DIR%\start.bat"
 schtasks /Create /TN "%APP_TASK%" /SC ONSTART /RU SYSTEM /RL HIGHEST /F /TR "\"%DATA_DIR%\start.bat\"" >nul 2>&1
@@ -155,10 +160,12 @@ goto DONE
 :RUN
 call :TOOLS || goto FAIL
 call :DIRS
-if not exist "%APP_DIR%\.git" call :INSTALL
+if not exist "%APP_DIR%\.git" (
+  call :INSTALL || goto FAIL
+)
 :LOOP
-call :UPDATE >nul 2>&1
-if errorlevel 1 echo [%DATE% %TIME%] [WARNING] Update/health cycle failed.
+call :UPDATE >> "%DATA_DIR%\logs\autopilot.log" 2>&1
+if errorlevel 1 echo [%DATE% %TIME%] [WARNING] Update/health cycle failed. See "%DATA_DIR%\logs\autopilot.log".
 timeout /t %CHECK_SECONDS% /nobreak >nul
 goto LOOP
 
