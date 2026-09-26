@@ -25,18 +25,16 @@ async def broadcast_to_users(user_ids, payload: dict):
 
 def user_is_member(user_id: int, chat_id: int) -> bool:
     with SessionLocal() as db:
-        return db.scalar(
-            select(ChatMember.id).where(
-                and_(ChatMember.chat_id == chat_id, ChatMember.user_id == user_id)
-            )
-        ) is not None
+        return db.scalar(select(ChatMember.id).where(
+            and_(ChatMember.chat_id == chat_id, ChatMember.user_id == user_id)
+        )) is not None
 
 def member_ids_for_user(db, user_id: int) -> list[int]:
     chat_ids = select(ChatMember.chat_id).where(ChatMember.user_id == user_id)
     return db.scalars(
-        select(ChatMember.user_id)
-        .where(ChatMember.chat_id.in_(chat_ids))
-        .distinct()
+        select(ChatMember.user_id).where(
+            ChatMember.chat_id.in_(chat_ids)
+        ).distinct()
     ).all()
 
 async def notify_presence(user_id: int, online: bool):
@@ -46,12 +44,14 @@ async def notify_presence(user_id: int, online: bool):
             return
         recipients = member_ids_for_user(db, user_id)
         if online:
-        visible = [
-            uid for uid in recipients
-            if uid != user_id and can_view(db, uid, user, user.online_visibility)
-        ]
-    else:
-        visible = [uid for uid in recipients if uid != user_id]
+            visible = [
+                uid for uid in recipients
+                if uid != user_id and can_view(db, uid, user, user.online_visibility)
+            ]
+        else:
+            # Sending "offline" does not reveal additional presence information;
+            # it is needed to clear stale green indicators after disconnect/privacy changes.
+            visible = [uid for uid in recipients if uid != user_id]
     await broadcast_to_users(
         visible,
         {"type": "presence", "user_id": user_id, "online": online},
