@@ -257,24 +257,21 @@ def session_bootstrap(
 @router.post("/refresh")
 def refresh(
     request: Request,
+    response: Response,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
 ):
-    if not credentials:
+    raw = request.cookies.get("lederg_auth") or (credentials.credentials if credentials else None)
+    if not raw:
         raise HTTPException(401, "Нужна активная сессия")
+
+    payload = _decode_token(raw)
     try:
-        payload = jwt.decode(
-            credentials.credentials,
-            settings.secret_key,
-            algorithms=["HS256"],
-            options={"verify_exp": False},
-        )
         user_id = int(payload["sub"])
-        sid = payload.get("sid")
     except Exception:
         raise HTTPException(401, "Сессия недействительна")
 
-    # Legacy JWTs created before server-side sessions had no sid.
-    # Migrate an unexpired legacy token once, instead of throwing the user out.
+    sid = payload.get("sid")
+
     if not sid:
         exp = payload.get("exp")
         if not exp or float(exp) <= datetime.now(timezone.utc).timestamp():
@@ -288,6 +285,7 @@ def refresh(
             remembered=True,
             device_name=detect_device(request),
         )
+        _set_auth_cookie(response, token, True, request)
         return {
             "access_token": token,
             "remembered": True,
@@ -295,43 +293,28 @@ def refresh(
             "migrated": True,
         }
 
-    with SessionLocal() as db:
-        session = db.get(Session, sid)
-        user = db.get(User, user_id)
-        if not session or session.revoked or session.user_id != user_id or not user or not user.is_active:
-            raise HTTPException(401, "Сессия завершена")
-
-        if not session.remembered:
-            try:
-                jwt.decode(credentials.credentials, settings.secret_key, algorithms=["HS256"])
-            except Exception:
-                raise HTTPException(401, "Сессия истекла")
-
-        session.last_seen_at = datetime.now(timezone.utc)
-        db.commit()
-        ttl = settings.token_minutes if session.remembered else min(settings.token_minutes, 720)
-        return {
-            "access_token": make_token(user_id, sid, ttl),
-            "remembered": bool(session.remembered),
-            "device_name": session.device_name or "LEDERG device",
-        }
+    token, remembered, device = _session_token_from_sid(user_id, str(sid))
+    _set_auth_cookie(response, token, remembered, request)
+    return {
+        "access_token": token,
+        "remembered": remembered,
+        "device_name": device,
+    }
 
 
 @router.post("/logout")
-def logout(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)):
-    if not credentials:
-        return {"ok": True}
-
-    try:
-        payload = jwt.decode(
-            credentials.credentials,
-            settings.secret_key,
-            algorithms=["HS256"],
-            options={"verify_exp": False},
-        )
-        sid = payload.get("sid")
-    except Exception:
-        sid = None
+def logout(
+    request: Request,
+    response: Response,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+):
+    raw = request.cookies.get("lederg_auth") or (credentials.credentials if credentials else None)
+    sid = None
+    if raw:
+        try:
+            sid = _decode_token(raw).get("sid")
+        except Exception:
+            sid = None
 
     if sid:
         with SessionLocal() as db:
@@ -339,4 +322,6 @@ def logout(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)):
             if session:
                 session.revoked = True
                 db.commit()
+
+    response.delete_cookie("lederg_auth", path="/")
     return {"ok": True}
