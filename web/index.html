@@ -130,7 +130,7 @@
       <div class="setting"><div class="setting-copy"><div class="setting-name">Стиль пузырей</div><div class="setting-desc">Локально для этого устройства</div></div><select id="chatTheme"><option value="default">Стандарт</option><option value="emerald">Emerald</option><option value="sunset">Sunset</option><option value="violet">Violet</option></select></div>
 
       <div class="section-title">Защита личного чата</div>
-      <div id="chatSecurityInfo" class="muted-box">Проверка ключа…</div>
+      <div id="chatSecurityInfo" class="muted-box">Проверка ключа…</div><div id="blockChatWrap" class="profile-actions" style="margin-top:12px"><button id="blockChatUserBtn" class="btn danger-btn">Заблокировать пользователя</button></div>
     </div>
   </div>
 </div>
@@ -203,7 +203,7 @@ async function loadMe(){
   $('myUsername').textContent='@'+state.user.username;
   setAvatarElement($('myAvatar'),state.user.avatar_url,state.user.display_name);
   setAvatarElement($('profileAvatar'),state.user.avatar_url,state.user.display_name);
-  $('myOnlineDot').classList.add('show');
+  $('myOnlineDot').classList.remove('show');
   fillProfileForm();
   await initCrypto();
 }
@@ -292,7 +292,7 @@ async function startChat(user){
 function connectWS(){
   if(!state.token)return;
   try{
-    const scheme=location.protocol==='https:'?'wss':'ws';state.ws=new WebSocket(scheme+'://'+location.host+'/ws?token='+encodeURIComponent(state.token));
+    const scheme=location.protocol==='https:'?'wss':'ws';state.ws=new WebSocket(scheme+'://'+location.host+'/ws?token='+encodeURIComponent(state.token));state.ws.onopen=()=>setOnlineDot($('myOnlineDot'),true);
     state.ws.onmessage=async e=>{
       const d=JSON.parse(e.data||'{}');
       if(d.type==='new_message'){
@@ -307,7 +307,7 @@ function connectWS(){
       else if(d.type==='typing'&&d.chat_id===state.activeChat?.id&&d.user_id!==state.user.id){$('chatSub').textContent=d.is_typing?'печатает…':'@'+(state.activeChat.peer?.username||'')+(state.activeChat.peer?.online?' • в сети':'')}
       else if(d.type==='read'){}
     };
-    state.ws.onclose=()=>{state.ws=null;setTimeout(()=>state.token&&connectWS(),2500)}
+    state.ws.onclose=()=>{setOnlineDot($('myOnlineDot'),false);state.ws=null;setTimeout(()=>state.token&&connectWS(),2500)}
   }catch{}
 }
 function sendWS(data){if(state.ws?.readyState===WebSocket.OPEN)state.ws.send(JSON.stringify(data))}
@@ -431,7 +431,8 @@ $('messageInput').oninput=()=>{if(state.activeChat)sendWS({type:'typing',chat_id
 $('composer').onsubmit=e=>{e.preventDefault();sendMessage()};
 $('messages').onscroll=()=>{if(state.activeChat&&state.user?.read_receipts&&$('messages').scrollTop<30)sendWS({type:'read',chat_id:state.activeChat.id,message_id:$('messages').lastElementChild?.dataset?.id})};
 $('backBtn').onclick=()=>{$('chatPane').classList.remove('open');$('sidebar').classList.add('open')};
-$('chatSettingsBtn').onclick=()=>{if(state.activeChat)openModal('chatModal')};
+$('chatSettingsBtn').onclick=async()=>{if(state.activeChat){$('blockChatWrap').style.display=state.activeChat.type==='direct'?'flex':'none';openModal('chatModal')}};
+$('blockChatUserBtn').onclick=async()=>{const p=state.activeChat?.peer;if(!p)return;if(!confirm('Заблокировать @'+p.username+'?'))return;try{await api('/api/users/'+p.id+'/block',{method:'POST'});closeModal('chatModal');toast('Пользователь заблокирован');await loadChats()}catch(e){toast(e.message)}};
 $('chatNotifications').onchange=saveChatSettings;$('chatTheme').onchange=saveChatSettings;
 $('avatarUploadBtn').onclick=()=>$('avatarFile').click();$('avatarFile').onchange=async e=>{const f=e.target.files?.[0];if(!f)return;try{const r=await upload('/api/users/me/avatar',f);state.user.avatar_url=r.avatar_url;state.user.has_avatar=true;await setAvatarElement($('myAvatar'),r.avatar_url,state.user.display_name);await setAvatarElement($('profileAvatar'),r.avatar_url,state.user.display_name);await loadChats();toast('Аватар обновлён')}catch(err){toast(err.message)}e.target.value=''};
 $('avatarDeleteBtn').onclick=async()=>{try{await api('/api/users/me/avatar',{method:'DELETE'});state.user.avatar_url=null;state.user.has_avatar=false;state.avatarUrls.clear();await setAvatarElement($('myAvatar'),null,state.user.display_name);await setAvatarElement($('profileAvatar'),null,state.user.display_name);await loadChats();toast('Аватар удалён')}catch(e){toast(e.message)}};
