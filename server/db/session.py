@@ -62,7 +62,12 @@ def init_db():
             conn, "sessions", "remembered",
             "ALTER TABLE sessions ADD COLUMN remembered BOOLEAN NOT NULL DEFAULT 1"
         )
+        _add_column_if_missing(
+            conn, "sessions", "resume_token_hash",
+            "ALTER TABLE sessions ADD COLUMN resume_token_hash VARCHAR(128)"
+        )
         conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_users_discoverable_username ON users(discoverable, username)")
         conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_sessions_user_revoked ON sessions(user_id, revoked)")
         conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_sessions_user_remembered ON sessions(user_id, remembered)")
+        conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_sessions_resume_token_hash ON sessions(resume_token_hash)")
         conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_blocks_blocker_blocked ON blocks(blocker_id, blocked_id)")
