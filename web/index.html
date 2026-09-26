@@ -998,7 +998,17 @@ $('composer').onsubmit=async e=>{
  e.preventDefault();if(!state.activeChat)return;
  const input=$('messageInput');const textValue=input.value.trim();if(!textValue)return;input.value='';
  sendWS({type:'typing',chat_id:state.activeChat.id,is_typing:false});
- try{const msg=await api('/api/chats/'+state.activeChat.id+'/messages',{method:'POST',body:JSON.stringify({text:textValue})});addMessage(msg,true)}catch(err){input.value=textValue;alert(err.message)}
+ try{
+   let msg;
+   try{
+    msg=await api('/api/chats/'+state.activeChat.id+'/messages',{method:'POST',body:JSON.stringify({text:textValue})});
+   }catch(err){
+    if(err.code!=='AUTH_RETRY')throw err;
+    await recoverSession();
+    msg=await api('/api/chats/'+state.activeChat.id+'/messages',{method:'POST',body:JSON.stringify({text:textValue})});
+   }
+   addMessage(msg,true);
+  }catch(err){input.value=textValue;alert(err.message)}
 };
 $('messages').onscroll=()=>{if(state.activeChat&&$('messages').scrollTop<30)sendWS({type:'read',chat_id:state.activeChat.id,message_id:$('messages').lastElementChild?.dataset?.id})};
 $('backBtn').onclick=()=>{$('chatPane').classList.remove('open');$('sidebar').classList.remove('hidden')};
