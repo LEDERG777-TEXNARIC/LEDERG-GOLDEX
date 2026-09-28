@@ -56,10 +56,16 @@ function InstallDeps {
     if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed" }
 }
 function Healthy {
-    try {
-        $r=Invoke-RestMethod "http://127.0.0.1:$Port/health" -TimeoutSec 8
-        return ($r.ok -eq $true -and $r.database -eq "ok")
-    } catch { return $false }
+    for($attempt=1; $attempt -le 10; $attempt++){
+        try {
+            $r=Invoke-RestMethod "http://127.0.0.1:$Port/health" -TimeoutSec 5 -ErrorAction Stop
+            if($r.ok -eq $true -and $r.database -eq "ok"){
+                return $true
+            }
+        } catch {}
+        if($attempt -lt 10){ Start-Sleep -Seconds 2 }
+    }
+    return $false
 }
 function FindServerProcess {
     Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" -ErrorAction SilentlyContinue |
