@@ -23,9 +23,9 @@ function Log([string]$m) {
 $mutex = New-Object System.Threading.Mutex($false, "Global\LEDERG-MESSENGER-AUTOPILOT")
 if (-not $mutex.WaitOne(0)) { Log "Another autopilot instance is running."; exit 0 }
 
-function G([string[]]$args) {
-    $out = & git @args 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "git $($args -join ' ') failed: $out" }
+function G([string[]]$gitArgs) {
+    $out = & git @gitArgs 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "git $($gitArgs -join ' ') failed: $out" }
     return $out
 }
 function Commit([string]$ref) { return (& git -C $AppDir rev-parse $ref).Trim() }
