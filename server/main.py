@@ -115,7 +115,6 @@ media_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/media", StaticFiles(directory=media_dir), name="media")
 
 web_dir = Path(__file__).resolve().parent.parent / "web"
-app.mount("/", StaticFiles(directory=web_dir, html=True), name="web")
 
 @app.get("/api/ping")
 def api_ping():
@@ -151,3 +150,6 @@ def health():
                 "reason": str(exc)[:200],
             },
         )
+
+
+app.mount("/", StaticFiles(directory=web_dir, html=True), name="web")
